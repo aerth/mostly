@@ -66,14 +66,20 @@ func FetchDB_Tx[T any, K byteslike](tx *bbolt.Tx, bucket string, key ...K) (T, e
 		}
 		return ncode.DecodeJson[T](bu.Get([]byte(key[0])))
 	}
-	log.Println("checking", l, "nested", string(key[0]), string(key[1]))
+	if ncode.DebugJsonRequests {
+		log.Println("checking", l, "nested", string(key[0]), string(key[1]))
+	}
 	for i := 0; i < l-1; i++ {
-		log.Printf("checking: %q (hex: %02x)", string(key[i]), key[i])
+		if ncode.DebugJsonRequests {
+			log.Printf("checking: %q (hex: %02x)", string(key[i]), key[i])
+		}
 		bu = bu.Bucket([]byte(key[i]))
 		if bu == nil {
 			var v T
-			log.Printf("fail %d: bucket %s is nil", i, string(key[i]))
-			return v, fmt.Errorf("bad nested lookup")
+			if ncode.DebugJsonRequests {
+				log.Printf("fail %d: bucket %s is nil", i, string(key[i]))
+			}
+			return v, bbolt.ErrBucketNotFound
 		}
 	}
 	return ncode.DecodeJson[T](bu.Get([]byte(key[l-1])))
