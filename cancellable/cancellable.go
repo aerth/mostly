@@ -6,7 +6,8 @@ import "context"
 type Cancellable interface {
 	context.Context
 	Cancel(err error)            // stop listening and close connection. does not close chan.
-	GetContext() context.Context // for interface compatibility (even tho this is a context.Context)
+	GetContext() context.Context // for interface compatibility (returns underlying Context, not self)
+	Wait() error                 // wait for context to be done, return underlying error cause
 }
 
 // New cancellable (must Cancel to prevent context leak)
@@ -41,4 +42,8 @@ func (c *cancellable) Cancel(err error) {
 }
 func (c *cancellable) GetContext() context.Context {
 	return c.Context
+}
+func (c *cancellable) Wait() error {
+	<-c.Done()
+	return context.Cause(c)
 }
