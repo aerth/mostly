@@ -329,7 +329,7 @@ func (s *HttpServer) Refresh(newmainctx context.Context) {
 	}
 	old := s.Server
 	s.Superchan = superchan.NewMain(newmainctx, s.signalshandled...).(*superchan.Superchan[os.Signal])
-	s.Server = buildserver(s.Superchan, s.ServeMux)
+	s.Server = buildserver(s.Superchan, s.Server.Handler)
 	s.Server.BaseContext = basectxfn(s.Superchan)
 	s.Server.ErrorLog = old.ErrorLog
 	s.Server.ConnState = old.ConnState
