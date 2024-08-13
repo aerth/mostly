@@ -3,11 +3,7 @@ package journalwriter
 import (
 	"io"
 	"os"
-
-	"github.com/coreos/go-systemd/journal"
 )
-
-type Priority = journal.Priority
 
 var _ io.Writer = (*JournalWriter)(nil) // compile-time interface check
 
@@ -41,7 +37,7 @@ var DontFallback = false
 //
 // See DontLogErrors and DontFallback to change behavior when errors occur.
 func (j JournalWriter) Write(b []byte) (int, error) {
-	err := journal.Send(string(b), j.Priority, nil)
+	err := Send(string(b), j.Priority, nil)
 	if err != nil {
 		if FallbackWriter != nil {
 			if !DontLogErrors {
@@ -61,15 +57,10 @@ func (j JournalWriter) Write(b []byte) (int, error) {
 // If p is zero, uses INFO level
 func GetJournalOrStderr(p Priority) io.Writer {
 	if p == 0 {
-		p = journal.PriInfo
+		p = PriInfo
 	}
-	if !journal.Enabled() {
+	if !Enabled() {
 		return os.Stderr
 	}
 	return JournalWriter{p}
-}
-
-// Enabled checks whether the local systemd journal is available for logging.
-func Enabled() bool {
-	return journal.Enabled()
 }
