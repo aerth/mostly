@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aerth/mostly/cancellable"
+	"github.com/aerth/mostly/flagpkg"
 )
 
 var Log = log.Default()
@@ -34,6 +35,13 @@ var CancelBeforeDefer = true
 // Default is true because it often safer to run deferred funcs in goroutines (we handle panic).
 // See DeferFirst and DeferLast.
 var UseGoroutineDefer = true
+
+func Flags() {
+	// superchan behavior
+	flagpkg.InverseFlagVar(&CancelBeforeDefer, "defer-first", CancelBeforeDefer, "cancel last")
+	flagpkg.InverseFlagVar(&UseGoroutineDefer, "defer-ordered", UseGoroutineDefer, "run deferred funcs in sequence")
+
+}
 
 // Superchan handles signals, is a cancellable.Chan[os.Signal] with defer funcs
 //
@@ -180,24 +188,30 @@ func NewMain(parent context.Context, signals ...os.Signal) cancellable.Cancellab
 	}
 	chctx := NewRaw[os.Signal](parent)
 	signal.Notify(chctx.Ch(), signals...)
-	if chctx.Err() == nil {
-		go func() {
-			defer signal.Stop(chctx.Ch())
-			select {
-			case <-chctx.Done(): // someone else cancelled the ctx
-				chctx.rundeferred()
-			case in := <-chctx.UpdatesChan(): // signal caught, lets cancel the context
-				if CancelBeforeDefer {
-					chctx.Cancel(MakeSignalError(in))
-					chctx.rundeferred()
-				} else {
-					chctx.rundeferred()
-					chctx.Cancel(MakeSignalError(in))
-				}
-			}
-		}()
+	if chctx.Err() != nil { // rare
+		return chctx
 	}
+	go mainSignalHandler(chctx)
 	return chctx
+}
+
+func mainSignalHandler(chctx *Superchan[os.Signal]) {
+	defer func() {
+		signal.Stop(chctx.Ch())
+		close(chctx.Ch())
+	}()
+	select {
+	case <-chctx.Done(): // someone else cancelled the ctx
+		chctx.rundeferred()
+	case in := <-chctx.UpdatesChan(): // signal caught, lets cancel the context
+		if CancelBeforeDefer {
+			chctx.Cancel(MakeSignalError(in))
+			chctx.rundeferred()
+		} else {
+			chctx.rundeferred()
+			chctx.Cancel(MakeSignalError(in))
+		}
+	}
 }
 
 // New Superchan for processing a channel, with defer funcs and cancellation.
@@ -238,51 +252,71 @@ func NewRaw[T any](parent context.Context) *Superchan[T] {
 	return &Superchan[T]{Chan: cancellable.NewChan[T](parent), deferfuncs: []func(){}} // non-nil
 }
 
-// New Double Superchan for processing a channel, with defer funcs and cancellation.
+// New Double Superchan for processing a channel, with handler func, defer funcs and cancellation.
 //
-// Send to first, Receive from second. (chctx2.UpdateChan())
+// Send to chctx.Ch() and cancel everything with chctx.Cancel(err).
 //
-// Reads from the channel and calls the handler func for every update. Send to chctx.Ch(), cancel with chctx.Cancel(err).
+// Unhandled packets will be sent to chctx2.Ch(), but if buffer is full they are dropped.
+//
+// Send to first, Handler processes, then Receive from second if handler returns non-nil. (chctx2.UpdateChan())
+// Reads from the channel and calls the handler func for every update.
 //
 // The handler func can be nil, or a function called before sending to chctx2.
-func NewDouble[T any](parent context.Context, handler func(context.Context, T) error, parallel bool) (*Superchan[T], *Superchan[T]) {
+func NewDouble[T any](parent context.Context, handler func(context.Context, **T) error, parallel bool) (*Superchan[T], *Superchan[T]) {
 	if handler == nil {
 		panic("superchan: no handler provided")
 	}
 	chctx := NewRaw[T](parent)
 	chctx2 := NewRaw[T](chctx)
 	go func() {
+		defer func() {
+			close(chctx.Ch())
+			close(chctx2.Ch())
+		}()
 		for chctx.Err() == nil {
 			select {
 			case <-chctx.Done(): // someone else cancelled the ctx
 				chctx.rundeferred()
 				return
+			case <-chctx2.Done(): // someone else cancelled the ctx
+				chctx.rundeferred()
+				return
 			case in := <-chctx.UpdatesChan(): // signal caught, lets cancel the context
-				if handler != nil {
-					if parallel {
-						go func() {
-							if err := handler(chctx2, in); err != nil {
-								chctx.Cancel(err) // should break loop and run deferred funcs
-							}
-						}()
-					} else {
-						if err := handler(chctx2, in); err != nil {
-							chctx.Cancel(err) // should break loop and run deferred funcs
-						}
-					}
-				}
-				select {
-				case <-chctx.Done(): // someone else cancelled the ctx
-					chctx.rundeferred()
-					return
-				case <-chctx2.Done(): // someone else cancelled the second ctx.
-					chctx.Cancel(context.Cause(chctx2))
-					chctx.rundeferred()
-					return
-				case chctx2.Ch() <- in:
+				if parallel {
+					go handledoublein(chctx, chctx2, in, handler)
+				} else {
+					handledoublein(chctx, chctx2, in, handler)
 				}
 			}
+
 		}
 	}()
 	return chctx, chctx2
+}
+
+// may or may not be called in a goroutine
+func handledoublein[T any](chctx *Superchan[T], chctx2 *Superchan[T], in T, handler func(context.Context, **T) error) {
+	if chctx.Err() != nil || chctx2.Err() != nil {
+		return
+	}
+	var input *T = &in
+	var out = &input
+	if handler != nil {
+		if err := handler(chctx2, out); err != nil {
+			chctx.Cancel(err) // should break loop and run deferred funcs
+			return
+		}
+	}
+	if *out == nil {
+		//	println("handled by handler")
+		return
+	}
+	//println("output handler: ", **out)
+	select {
+	case <-chctx.Done():
+	case <-chctx2.Done():
+	case chctx2.Ch() <- **out:
+	default:
+		//println("dropped") // buffer is full
+	}
 }

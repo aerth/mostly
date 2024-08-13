@@ -13,6 +13,7 @@ import (
 
 	"github.com/aerth/mostly/httpserver/httpctx"
 	"github.com/aerth/mostly/superchan"
+	"github.com/pkg/errors"
 	"golang.org/x/exp/rand"
 )
 
@@ -28,11 +29,40 @@ type HttpServer struct {
 	homehandler     http.HandlerFunc
 	notfoundhandler http.HandlerFunc
 	signalshandled  []os.Signal
+	shutdownfunc1   func() // called before http shutdown
+	shutdownfunc    func() // called after http shutdown
+	refreshfunc     func(s *HttpServer) error
 }
 
 // Config is only for convenience, used by your application and middlewares
 type Config struct {
 	BaseURL string `json:"base_url"`
+}
+
+// called after Refresh() is completed, before Refresh() returns.
+func (h *HttpServer) SetRefreshFunc(f func(s *HttpServer) error) {
+	h.refreshfunc = f
+}
+
+// SetShutdownFunc to run after http server is shutdown
+func (h *HttpServer) SetShutdownFunc(f func()) {
+	h.shutdownfunc = f
+}
+
+// DeferLast override because httpserver occupies superchan.DeferLast
+//
+// f will be called AFTER all other deferred funcs, before ListenAndServeAll returns.
+//
+// is persistent across server.Refresh() calls, but will be replaced if called again.
+func (h *HttpServer) DeferLast(f func()) {
+	h.SetShutdownFunc(f)
+}
+
+// DeferFirst override because httpserver occupies superchan.DeferFirst
+//
+// f will be called BEFORE http server shutdown begins
+func (h *HttpServer) DeferFirst(f func()) {
+	h.shutdownfunc1 = f
 }
 
 func (c *Config) GetBaseURL() string {
@@ -86,19 +116,20 @@ func basectxfn(basectx context.Context) func(net.Listener) context.Context {
 
 var IdleTimeout = time.Second * 2
 
+func connctxfun(ctx context.Context, c net.Conn) context.Context { // get conn
+	ctx = context.WithValue(ctx, httpctx.KUUID, UUIDFunc(c))
+	return context.WithValue(ctx, httpctx.KConn, c)
+}
 func buildserver(basectx context.Context, routes http.Handler) *http.Server {
 	return &http.Server{
-		Addr:              "", // set by ListenAndServeAll
-		Handler:           routes,
-		ReadTimeout:       5 * time.Second,
-		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       IdleTimeout,
-		MaxHeaderBytes:    1 << 20,
-		ConnContext: func(ctx context.Context, c net.Conn) context.Context { // get conn
-			ctx = context.WithValue(ctx, httpctx.KUUID, UUIDFunc(c))
-			return context.WithValue(ctx, httpctx.KConn, c)
-		},
+		Addr:                         "", // set by ListenAndServeAll
+		Handler:                      routes,
+		ReadTimeout:                  5 * time.Second,
+		ReadHeaderTimeout:            5 * time.Second,
+		WriteTimeout:                 10 * time.Second,
+		IdleTimeout:                  IdleTimeout,
+		MaxHeaderBytes:               1 << 20,
+		ConnContext:                  connctxfun,
 		ConnState:                    nil,
 		BaseContext:                  basectxfn(basectx),
 		TLSConfig:                    nil,
@@ -255,10 +286,10 @@ func (s *HttpServer) ServeJsonIndent(w http.ResponseWriter, code int, v interfac
 }
 
 func (s *HttpServer) serveHttps(httpsAddr string, cert, key string, deferfunc func()) {
+	defer deferfunc()
 	if OneClosesBoth {
-		defer deferfunc()
+		defer s.Cancel(fmt.Errorf("https listener died"))
 	}
-	defer s.Cancel(fmt.Errorf("https listener died"))
 	s.Addr = httpsAddr
 	if s.ErrorLog != nil {
 		s.ErrorLog.Printf("https server: starting https://%s", s.Addr)
@@ -276,10 +307,10 @@ func (s *HttpServer) serveHttps(httpsAddr string, cert, key string, deferfunc fu
 }
 
 func (s *HttpServer) serveHttp(httpAddr string, deferfunc func()) {
+	defer deferfunc()
 	if OneClosesBoth {
-		defer deferfunc()
+		defer s.Cancel(fmt.Errorf("http listener died"))
 	}
-	defer s.Cancel(fmt.Errorf("http listener died"))
 	s.Addr = httpAddr
 	if s.ErrorLog != nil {
 		s.ErrorLog.Printf("http server: starting http://%s", s.Addr)
@@ -301,10 +332,16 @@ func (s *HttpServer) listenAndServe(httpAddr string, httpsAddr string, cert, key
 	var wg sync.WaitGroup
 	wg.Add(1) // wg: superchan DeferLast
 
-	s.DeferFirst(func() {
+	s.Superchan.DeferFirst(func() {
+		if s.shutdownfunc1 != nil {
+			s.shutdownfunc1()
+		}
 		s.shutdown() // shutdown http server (calls registered shutdown funcs)
 	})
-	s.DeferLast(func() { // something else to wait for
+	s.Superchan.DeferLast(func() { // something else to wait for
+		if s.shutdownfunc != nil {
+			s.shutdownfunc()
+		}
 		wg.Done()
 	})
 	if key != "" && cert != "" && httpsAddr != "" {
@@ -319,8 +356,12 @@ func (s *HttpServer) listenAndServe(httpAddr string, httpsAddr string, cert, key
 	wg.Wait()
 }
 
-// Refresh after closing the server (reset channel, context, reuse ServeMux)
-func (s *HttpServer) Refresh(newmainctx context.Context) {
+// Refresh ONLY after closing the server (resets channel, context, reuses ServeMux)
+// Will panic if called before server is closed.
+// ONLY returns error if refreshfunc returns an error, in which case it cancels the context.
+//
+// If using Refresh(), check error before adding superchan.Defer functions.
+func (s *HttpServer) Refresh(newmainctx context.Context) error {
 	if s.Err() == nil {
 		panic("httpserver: cannot refresh, no error")
 	}
@@ -330,16 +371,31 @@ func (s *HttpServer) Refresh(newmainctx context.Context) {
 	old := s.Server
 	s.Superchan = superchan.NewMain(newmainctx, s.signalshandled...).(*superchan.Superchan[os.Signal])
 	s.Server = buildserver(s.Superchan, s.Server.Handler)
-	s.Server.BaseContext = basectxfn(s.Superchan)
-	s.Server.ErrorLog = old.ErrorLog
-	s.Server.ConnState = old.ConnState
-	s.Server.TLSNextProto = old.TLSNextProto
-	s.Server.TLSConfig = old.TLSConfig
-	s.Server.DisableGeneralOptionsHandler = old.DisableGeneralOptionsHandler
-	s.Server.MaxHeaderBytes = old.MaxHeaderBytes
-	s.Server.IdleTimeout = old.IdleTimeout
-	s.Server.WriteTimeout = old.WriteTimeout
-	s.Server.ReadHeaderTimeout = old.ReadHeaderTimeout
-	s.Server.ReadTimeout = old.ReadTimeout
-	s.IdleTimeout = IdleTimeout // reset magic number
+	copyHttpServer(s.Server, old)
+	if s.refreshfunc != nil {
+		if err := s.refreshfunc(s); err != nil {
+			s.Cancel(errors.Wrap(err, "refresh"))
+			return err
+		}
+	}
+	return nil
+}
+
+// retain (most) customizations.
+// ignores Handler, IdleTimeout, BaseContext
+func copyHttpServer(s, s2 *http.Server) {
+	s.Addr = s2.Addr
+	//s.Handler = s2.Handler
+	s.ReadTimeout = s2.ReadTimeout
+	s.ReadHeaderTimeout = s2.ReadHeaderTimeout
+	s.WriteTimeout = s2.WriteTimeout
+	//s.IdleTimeout = s2.IdleTimeout
+	s.MaxHeaderBytes = s2.MaxHeaderBytes
+	s.ConnContext = s2.ConnContext
+	s.ConnState = s2.ConnState
+	//s.BaseContext = s2.BaseContext
+	s.TLSConfig = s2.TLSConfig
+	s.DisableGeneralOptionsHandler = s2.DisableGeneralOptionsHandler
+	s.ErrorLog = s2.ErrorLog
+	s.TLSNextProto = s2.TLSNextProto
 }
