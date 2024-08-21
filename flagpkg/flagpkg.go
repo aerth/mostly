@@ -7,7 +7,7 @@ import (
 	"strconv"
 )
 
-// InverseFlagVar defines a flag that inverts a bool value.
+// InverseBoolVar defines a flag that inverts a bool value.
 //
 // For example, "--no-foo" would set foo to false.
 //
@@ -15,8 +15,8 @@ import (
 //
 // Omitting flag does not change the value at all.
 //
-// If multiple flag.BoolVar and InverseFlagVar are used, the last one (on cmdline) wins.
-func InverseFlagVar(p *bool, name string, value bool, usage string) {
+// If multiple flag.BoolVar and InverseBoolVar are used, the last one (on cmdline) wins.
+func InverseBoolVar(p *bool, name string, value bool, usage string) {
 	flag.CommandLine.Var(newBoolValue(value, p), name, usage)
 }
 

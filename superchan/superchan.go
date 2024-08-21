@@ -36,10 +36,10 @@ var CancelBeforeDefer = true
 // See DeferFirst and DeferLast.
 var UseGoroutineDefer = true
 
+// Flags adds flags to the flag package for advanced superchan configuration at runtime.
 func Flags() {
-	// superchan behavior
-	flagpkg.InverseFlagVar(&CancelBeforeDefer, "defer-first", CancelBeforeDefer, "cancel last")
-	flagpkg.InverseFlagVar(&UseGoroutineDefer, "defer-ordered", UseGoroutineDefer, "run deferred funcs in sequence")
+	flagpkg.InverseBoolVar(&CancelBeforeDefer, "defer-first", CancelBeforeDefer, "server: cancel last")
+	flagpkg.InverseBoolVar(&UseGoroutineDefer, "defer-ordered", UseGoroutineDefer, "server: run deferred funcs in sequence")
 
 }
 
