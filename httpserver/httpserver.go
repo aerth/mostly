@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aerth/mostly/httpserver/httpctx"
@@ -21,13 +22,16 @@ import (
 type HttpServer struct {
 	*http.Server
 	*superchan.Superchan[os.Signal]
+
 	*http.ServeMux // at the bottom of all middleware
+
 	*Config
 
 	//
 	entrypoint      func(http.Handler) http.Handler
 	homehandler     http.HandlerFunc
 	notfoundhandler http.HandlerFunc
+	basehandler     http.Handler
 	signalshandled  []os.Signal
 	shutdownfunc1   func() // called before http shutdown
 	shutdownfunc    func() // called after http shutdown
@@ -74,13 +78,30 @@ var UUIDFunc = func(c net.Conn) int {
 	return rand.Intn(1000) + 1000
 }
 
-// New creates an httpserver (http+https) that closes on cancellation or signal (SIGINT, SIGHUP etc)
+// NewDefault creates a new httpserver using http.DefaultServeMux and sane default signals to handle (SIGHUP, SIGINT, SIGTERM)
+//
+// Assigns ErrorLog to log.Default()
+//
+// After NewDefault (probably as global var in main package), set ErrorLog and routing (Handle, HandleFunc, SetHomeHandler, SetNotFoundHandler),
+// then run ListenAndServeAll followed by Wait() to make sure cleanup functions run properly.
+func NewDefault() *HttpServer {
+	x := New(context.Background(), http.DefaultServeMux, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
+	x.ErrorLog = log.Default()
+	return x
+}
+
+// New creates an httpserver (http+https) that closes on cancellation or provided signals (SIGINT, SIGHUP etc)
 // After New, set ErrorLog and routing (Handle, SetHomeHandler, SetNotFoundHandler), then run ListenAndServeAll.
 // Caller MUST NOT Handle("/") as it is reserved for the home/notfound combo handler.
 // Will panic if handler is a servemux that already handles "/" path.
+//
+// See NewDefault for the typical setup.
 func New(ctx context.Context, routes *http.ServeMux, signals ...os.Signal) *HttpServer {
 	if routes == nil {
-		routes = http.NewServeMux()
+		routes = http.DefaultServeMux
+	}
+	if ctx == nil {
+		panic("no ctx")
 	}
 	var (
 		chctx = superchan.NewMain(ctx, signals...).(*superchan.Superchan[os.Signal])
@@ -95,17 +116,21 @@ func New(ctx context.Context, routes *http.ServeMux, signals ...os.Signal) *Http
 			signalshandled:  signals,
 		}
 	)
-	x.HandleFunc("/", x.basehandler)
+	x.basehandler = newbasehandler(x)
+	x.Handle("/", x.basehandler)
+	log.Printf("httpserver: created: %p %T", &x.basehandler, x.basehandler)
 	return x
 }
 
 // at the bottom of all middleware for home/notfound
-func (s *HttpServer) basehandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/" && s.homehandler != nil {
-		s.homehandler(w, r)
-		return
-	}
-	s.notfoundhandler(w, r)
+func newbasehandler(s *HttpServer) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" && s.homehandler != nil {
+			s.homehandler(w, r)
+			return
+		}
+		s.notfoundhandler(w, r)
+	})
 }
 
 func basectxfn(basectx context.Context) func(net.Listener) context.Context {
@@ -154,17 +179,30 @@ func (s *HttpServer) InsertMiddleware(middleware ...func(http.Handler) http.Hand
 	}
 }
 
-// DefaultNotFoundHandler simple json 404
+// NotFound404Code is a global setting to reply with a 404 status code with the *default* not found handler
+// Default is false (200 status code, 404/"not found" in json response)
+var NotFound404Code = false
+
+// DefaultNotFoundHandler simple json error response
+//
+// If NotFound404Code is true, will reply with a 404 status code
+// otherwise, will reply with a 200 status code
 var DefaultNotFoundHandler = func(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotFound)
 	w.Header().Set("Content-Type", "application/json")
+	if NotFound404Code {
+		w.WriteHeader(http.StatusNotFound)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"error": "not found",
 		"code":  http.StatusNotFound,
 	})
 }
 
-// SetEntry is like InsertMiddleware but is inserted automatically at ListenAndServeAll time
+// SetEntryMiddleware sets/replaces the (optional) top level middleware
+//
+// Like InsertMiddleware but is inserted automatically at top level at "ListenAndServeAll" time
 func (s *HttpServer) SetEntryMiddleware(entrypoint func(http.Handler) http.Handler) {
 	s.entrypoint = entrypoint
 }
@@ -178,15 +216,19 @@ func (s *HttpServer) SetNotFoundHandler(h http.HandlerFunc) {
 }
 
 // SwapServeMux with a new one (do this BEFORE calling InsertMiddleware)
-//
-// Replacing with a NewServeMux is not recommended, as it will not have the default NotFoundHandler.
+// Will panic if already added middleware or "/" endpoint (eg. do not use http.DefaultServeMux with SwapServeMux)
 func (s *HttpServer) SwapServeMux(mux *http.ServeMux) {
 	if s.Server.Handler != s.ServeMux {
 		panic("SwapServeMux: already added middleware, cannot swap")
 	}
+	if mux == s.ServeMux {
+		log.Printf("same same")
+		return
+	}
+
 	s.ServeMux = mux
 	s.Server.Handler = mux
-	mux.HandleFunc("/", s.basehandler)
+	mux.Handle("/", s.basehandler) // will panic if already set
 }
 
 // ShutdownServer with timeout
@@ -272,16 +314,32 @@ func (s *HttpServer) ListenAndServeAll(httpAddr string, httpsAddr string, cert, 
 // OneClosesBoth is a global setting to close both of the http+https stack when one of them closes
 var OneClosesBoth = true
 
+// EscapeHTML is a global setting to escape html in json responses (ServeJson, ServeJsonIndent)
+//
+// Default is false (no html escape)
+//
+// If nil, uses the default json encoder settings (escapes &lt; &gt; etc)
+//
+// To set true, use: `*http.EscapeHTML = true`
+var EscapeHTML = new(bool)
+
 func (s *HttpServer) ServeJson(w http.ResponseWriter, code int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
+	enc := json.NewEncoder(w)
+	if EscapeHTML != nil {
+		enc.SetEscapeHTML(*EscapeHTML)
+	}
+	enc.Encode(v)
 }
 func (s *HttpServer) ServeJsonIndent(w http.ResponseWriter, code int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
+	if EscapeHTML != nil {
+		enc.SetEscapeHTML(*EscapeHTML)
+	}
 	enc.Encode(v)
 }
 
@@ -372,6 +430,7 @@ func (s *HttpServer) Refresh(newmainctx context.Context) error {
 	s.Superchan = superchan.NewMain(newmainctx, s.signalshandled...).(*superchan.Superchan[os.Signal])
 	s.Server = buildserver(s.Superchan, s.Server.Handler)
 	copyHttpServer(s.Server, old)
+	s.basehandler = newbasehandler(s)
 	if s.refreshfunc != nil {
 		if err := s.refreshfunc(s); err != nil {
 			s.Cancel(errors.Wrap(err, "refresh"))
