@@ -194,10 +194,7 @@ var DefaultNotFoundHandler = func(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.WriteHeader(http.StatusOK)
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": "not found",
-		"code":  http.StatusNotFound,
-	})
+	w.Write([]byte("{\"code\":404,\"error\":\"not found\"}\n"))
 }
 
 // SetEntryMiddleware sets/replaces the (optional) top level middleware
@@ -323,7 +320,10 @@ var OneClosesBoth = true
 // To set true, use: `*http.EscapeHTML = true`
 var EscapeHTML = new(bool)
 
-func (s *HttpServer) ServeJson(w http.ResponseWriter, code int, v interface{}) {
+func (s *HttpServer) ServeJson(w http.ResponseWriter, code int, v any) {
+	ServeJson(w, code, v)
+}
+func ServeJson(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	enc := json.NewEncoder(w)
@@ -332,7 +332,10 @@ func (s *HttpServer) ServeJson(w http.ResponseWriter, code int, v interface{}) {
 	}
 	enc.Encode(v)
 }
-func (s *HttpServer) ServeJsonIndent(w http.ResponseWriter, code int, v interface{}) {
+func (s *HttpServer) ServeJsonIndent(w http.ResponseWriter, code int, v any) {
+	ServeJsonIndent(w, code, v)
+}
+func ServeJsonIndent(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	enc := json.NewEncoder(w)
