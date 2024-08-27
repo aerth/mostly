@@ -10,9 +10,10 @@ import (
 type contextKey string
 
 const KListener contextKey = "listener" // for assigning listener to context
-const KUUID contextKey = "uuid"         // for assigning UUID to context
+const KUUID contextKey = "uuid"         // for assigning UUID (RequestID) to context
 const KConn contextKey = "conn"         // for assigning net.Conn to context
 
+// GetUUID returns unique Request ID for this request (not user ID)
 func GetUUID(ctx context.Context) int {
 	if v := ctx.Value(KUUID); v != nil {
 		return v.(int)
@@ -56,6 +57,7 @@ func GetConn(ctx context.Context) net.Conn {
 	return nil
 }
 
+// GetListener (net.Listener) returns listener assigned to context
 func GetListener(ctx context.Context) net.Listener {
 	if v := ctx.Value(KListener); v != nil {
 		x, ok := v.(net.Listener)
@@ -70,6 +72,6 @@ func GetAny[T any](ctx context.Context, tag any) (T, bool) {
 		x, ok := v.(T)
 		return x, ok
 	}
-	var v T
+	var v T // if ptr, nil
 	return v, false
 }

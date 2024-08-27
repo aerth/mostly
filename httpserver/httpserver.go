@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"github.com/aerth/mostly/httpserver/httpctx"
 	"github.com/aerth/mostly/superchan"
 	"github.com/pkg/errors"
-	"golang.org/x/exp/rand"
 )
 
 // HttpServer handles signals, use as main context
@@ -73,7 +73,7 @@ func (c *Config) GetBaseURL() string {
 	return c.BaseURL
 }
 
-// UUIDFunc may be replaced (for example, ordered UUIDs)
+// UUIDFunc (RequestID) may be replaced (for example, ordered UUIDs)
 var UUIDFunc = func(c net.Conn) int {
 	return rand.Intn(1000) + 1000
 }
@@ -117,8 +117,7 @@ func New(ctx context.Context, routes *http.ServeMux, signals ...os.Signal) *Http
 		}
 	)
 	x.basehandler = newbasehandler(x)
-	x.Handle("/", x.basehandler)
-	log.Printf("httpserver: created: %p %T", &x.basehandler, x.basehandler)
+	x.Handle("/", x.basehandler) // will panic if already set. TODO: check with ServeMux.Handler
 	return x
 }
 
@@ -179,21 +178,16 @@ func (s *HttpServer) InsertMiddleware(middleware ...func(http.Handler) http.Hand
 	}
 }
 
-// NotFound404Code is a global setting to reply with a 404 status code with the *default* not found handler
-// Default is false (200 status code, 404/"not found" in json response)
-var NotFound404Code = false
+var Status404 = http.StatusOK // 200 default
 
 // DefaultNotFoundHandler simple json error response
 //
-// If NotFound404Code is true, will reply with a 404 status code
-// otherwise, will reply with a 200 status code
+// HTTP Code 200 OK is used to prevent browsers from showing their own error pages.
+//
+// If you want to return a 404 status code, set Status404 to http.StatusNotFound at any time.
 var DefaultNotFoundHandler = func(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if NotFound404Code {
-		w.WriteHeader(http.StatusNotFound)
-	} else {
-		w.WriteHeader(http.StatusOK)
-	}
+	w.WriteHeader(Status404) // 200 OK
 	w.Write([]byte("{\"code\":404,\"error\":\"not found\"}\n"))
 }
 
@@ -201,6 +195,9 @@ var DefaultNotFoundHandler = func(w http.ResponseWriter, r *http.Request) {
 //
 // Like InsertMiddleware but is inserted automatically at top level at "ListenAndServeAll" time
 func (s *HttpServer) SetEntryMiddleware(entrypoint func(http.Handler) http.Handler) {
+	if s.entrypoint != nil {
+		panic("SetEntryMiddleware: already set")
+	}
 	s.entrypoint = entrypoint
 }
 
@@ -273,7 +270,9 @@ func (s *HttpServer) ListenAndServeTLS(string, string) error {
 
 // ListenAndServeAll starts the http server (http+https) and blocks until done.
 // It will return an error if the server is cancelled or encounters an error during startup.
-// After returning, Refresh() can be called before calling again
+// Returns when both http and https listeners are closed.
+// Wait() must be called to ensure all cleanup functions are called.
+// After Wait(), Refresh() can be called before calling ListenAndServeAll again.
 func (s *HttpServer) ListenAndServeAll(httpAddr string, httpsAddr string, cert, key string) error {
 	if s.Err() != nil {
 		return fmt.Errorf("httpserver: already cancelled: %v", s.Err())
