@@ -15,7 +15,6 @@ import (
 
 	"github.com/aerth/mostly/httpserver/httpctx"
 	"github.com/aerth/mostly/superchan"
-	"github.com/pkg/errors"
 )
 
 // HttpServer handles signals, use as main context
@@ -435,7 +434,7 @@ func (s *HttpServer) Refresh(newmainctx context.Context) error {
 	s.basehandler = newbasehandler(s)
 	if s.refreshfunc != nil {
 		if err := s.refreshfunc(s); err != nil {
-			s.Cancel(errors.Wrap(err, "refresh"))
+			s.Cancel(fmt.Errorf("refresh: %w", err))
 			return err
 		}
 	}

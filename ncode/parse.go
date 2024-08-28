@@ -8,7 +8,7 @@ package ncode
 import (
 	"strconv"
 
-	"golang.org/x/exp/constraints"
+	"github.com/aerth/mostly/ncode/constraints"
 )
 
 // ParseNumber string->~uint

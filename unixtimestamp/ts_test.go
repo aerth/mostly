@@ -6,11 +6,15 @@ import (
 	"time"
 )
 
-func TestMicroseconds(t *testing.T) {
+func TestMillieconds(t *testing.T) {
 	var t1 = time.Now()
 	// wow now its microseconds
 	FuncFrom = FMilli
 	FuncTo = TMilli
+	t.Cleanup(func() {
+		FuncFrom = FSeconds
+		FuncTo = TSeconds
+	})
 	buf, err := Now().MarshalJSON()
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)

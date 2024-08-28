@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"golang.org/x/exp/constraints"
+	"github.com/aerth/mostly/ncode/constraints"
 )
 
 var Binary = binary.LittleEndian
