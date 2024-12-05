@@ -4,6 +4,7 @@ package unixtimestamp
 import (
 	"database/sql/driver"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -34,6 +35,13 @@ type UnixTimestampNotNull struct {
 }
 type UnixTimestampNull struct {
 	time.Time
+}
+
+func (ut *UnixTimestamp) String() string {
+	if ut == nil || ut.Time.IsZero() {
+		return "(none)"
+	}
+	return ut.Time.String()
 }
 
 func (ut UnixTimestamp) MarshalJSON() ([]byte, error) {
@@ -75,31 +83,23 @@ func (ut *UnixTimestamp) UnmarshalBinary(dat []byte) error {
 }
 
 func (u *UnixTimestamp) Scan(v interface{}) error {
-	if v == nil {
-		u.Time = time.Time{} // reset in case reused
-		return nil
-	}
+	var t time.Time
 	switch x := v.(type) {
-	case time.Time: // this is the most common case
-		u.Time = x
-	case string:
-		t, err := time.Parse(time.RFC3339Nano, x)
-		if err != nil {
-			return err
+	case nil:
+		t = time.Time{}
+	case time.Time:
+		t = x
+	case int64:
+		if x == 0 {
+			t = time.Time{}
+		} else {
+			t = FuncTo(x)
 		}
-		u.Time = t
 	default:
-		return Errorf("UnixTimestamp: unsupported type : %T", v)
+		return Errorf("unsupported type: %T", v)
 	}
-	if !NoCheckTimeScan {
-		// parsed, check for "valid" time
-		if u.Time.Before(zerotime) {
-			return Errorf("UnixTimestamp: time too early: %v", u.Time) // TODO
-		}
-		if u.Time.After(toofarfuture) {
-			return Errorf("UnixTimestamp: time too far in future: %v", u.Time)
-		}
-	}
+	u.Time = t
+
 	return nil
 }
 
@@ -111,16 +111,9 @@ func (u *UnixTimestamp) Scan(v interface{}) error {
 // 	return u.Time, nil
 // }
 
-func (u *UnixTimestampNotNull) Value() (driver.Value, error) {
-	if u == nil {
-		return time.Time{}, nil
-	}
-	return u.Time, nil
-}
-
 // Value is returns nil if zero time. Wrap with UnixTimestampNotNull for not null
-func (u UnixTimestampNull) Value() (driver.Value, error) {
-	if u.Time.IsZero() {
+func (u *UnixTimestamp) Value() (driver.Value, error) {
+	if u == nil || u.Time.IsZero() {
 		return nil, nil
 	}
 	return u.Time, nil
@@ -128,7 +121,13 @@ func (u UnixTimestampNull) Value() (driver.Value, error) {
 
 var NoCheckTimeScan bool
 var zerotime = FuncTo(0)
-var nineties, _ = time.Parse("2006-01-02", "1990-01-01")
+var nineties = func() time.Time {
+	t, err := time.Parse("2006-01-02", "1990-01-01")
+	if err != nil {
+		panic(err.Error())
+	}
+	return t
+}()
 
 // thousands of years in the future, to detect if someone uses milliseconds by accident
 var toofarfuture = FuncTo(nineties.UnixMilli())
@@ -160,4 +159,12 @@ func TMilli(i int64) time.Time {
 
 func TMicro(i int64) time.Time {
 	return time.UnixMicro(i)
+}
+
+func toJson(v interface{}) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err.Error())
+	}
+	return string(b)
 }
