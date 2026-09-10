@@ -1,3 +1,13 @@
+# mostly
+
+## stackerr
+
+Use `Errorf("%w", err)` everywhere, and then log.Printf("%+v", err) for helpful error stack trace
+
+## superchan
+
+Cancellable Channel Context
+
 ## ncode
 
 encoding, twist arrays (`[]string -> []MyString -> []string`)
