@@ -58,7 +58,7 @@ var (
 // Then elsewhere,
 //
 // > log.Printf("Error: %+v", err)
-func Errorf(format string, args ...interface{}) *StackError {
+func Errorf(format string, args ...interface{}) error {
 	st := GetFuncCallerInfo()
 	if CheckArgs && len(args) != 0 && !strings.Contains(format, "%w") && containsErr(args) {
 		if DEBUG {
