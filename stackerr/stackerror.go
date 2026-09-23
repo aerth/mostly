@@ -22,7 +22,7 @@ package stackerr
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 )
 
@@ -44,16 +44,27 @@ func containsErr(args []interface{}) bool {
 	return false
 }
 
-var DEBUG = false
+var (
+	DEBUG     = false
+	CheckArgs = false
+)
 
-// Errorf with stack trace from caller. Use %w !
+// Errorf with stack trace from caller. Use %w to wrap errors!
+//
+// example:
+//
+//	return stackerr.Errorf("%w", err)
+//
+// Then elsewhere,
+//
+// > log.Printf("Error: %+v", err)
 func Errorf(format string, args ...interface{}) *StackError {
 	st := GetFuncCallerInfo()
-	if len(args) != 0 && !strings.Contains(format, "%w") && containsErr(args) {
+	if CheckArgs && len(args) != 0 && !strings.Contains(format, "%w") && containsErr(args) {
 		if DEBUG {
 			panic("stackerr.Errorf must contain %w")
 		} else {
-			log.Printf("stackerr.Errorf must contain %%w")
+			slog.Warn("stackerr.Errorf must contain %w if error is last", "format", format)
 		}
 	}
 	return &StackError{error: fmt.Errorf(format, args...), St: st}
@@ -61,7 +72,7 @@ func Errorf(format string, args ...interface{}) *StackError {
 
 type StackError struct {
 	error
-	St FuncCallerInfo
+	St FuncCallerInfo `json:"caller"`
 }
 
 var _ error = (*StackError)(nil)
@@ -70,20 +81,19 @@ func (s *StackError) Format(f fmt.State, c rune) {
 	switch c {
 	case 'v':
 		if f.Flag('+') {
-			fmt.Fprintf(f, "%+v", s.error)
-			fmt.Fprintf(f, "\n\tfrom %s", s.St.String())
+			_, _ = fmt.Fprintf(f, "%+v", s.error)
+			_, _ = fmt.Fprintf(f, "\n\tfrom %s", s.St.String())
 			//chl, ok := s.error.(*StackError)
-			chld := new(StackError)
-			if errors.As(s.error, &chld) { // recurse
-				fmt.Fprintf(f, "\n\t\t%+v", chld)
+			if c, ok := errors.AsType[*StackError](s.error); ok { // recurse
+				_, _ = fmt.Fprintf(f, "\n\t\t%+v", c)
 			}
 			return
 		}
 		fallthrough
 	case 's':
-		fmt.Fprint(f, s.Error())
+		_, _ = fmt.Fprint(f, s.Error())
 	case 'q':
-		fmt.Fprintf(f, "%q", s.Error())
+		_, _ = fmt.Fprintf(f, "%q", s.Error())
 	}
 }
 

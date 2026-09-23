@@ -30,12 +30,13 @@ import (
 )
 
 type FuncCallerInfo struct {
-	funcname string
-	filetag  string
+	Name string `json:"name,omitempty"`
+	File string `json:"file,omitempty"`
+	Line int    `json:"line,omitempty"`
 }
 
 func (fci FuncCallerInfo) String() string {
-	return fmt.Sprintf("%s (%s)", fci.funcname, fci.filetag)
+	return fmt.Sprintf("%s (%s:%d)", fci.Name, fci.File, fci.Line)
 }
 
 func GetFuncCallerInfo(skips ...int) FuncCallerInfo {
@@ -53,14 +54,17 @@ func GetFuncCallerInfo(skips ...int) FuncCallerInfo {
 		//fmt.Printf("called from %s (%s:%d)\n", filepath.Base(details.Name()), tfile, tline)
 	}
 	return FuncCallerInfo{
-		funcname: filepath.Base(details.Name()),
-		filetag:  fmt.Sprintf("%s:%d", tfile, tline),
+		Name: filepath.Base(details.Name()),
+		File: tfile,
+		Line: tline,
 	}
 }
 
 // var mainmoduleprefix string
-var mainmodulecmdprefix string
-var mainpwd string
+var (
+	mainmodulecmdprefix string
+	mainpwd             string
+)
 
 func init() {
 	buildinfo, ok := debug.ReadBuildInfo()
@@ -78,6 +82,7 @@ func init() {
 	mainpwd = dir
 	mainmodulecmdprefix = buildinfo.Main.Path
 }
+
 func Cleanmodulepath(p string) string {
 	p1 := p
 	p = strings.TrimPrefix(p, mainmodulecmdprefix)
