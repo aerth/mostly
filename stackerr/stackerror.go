@@ -1,4 +1,4 @@
-// Copyright (c) 2024 aerth
+// Copyright (c) 2024-2026 aerth
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy of
 // this software and associated documentation files (the "Software"), to deal in
@@ -22,68 +22,110 @@ package stackerr
 import (
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 )
 
 // Wrap with stack trace from caller's caller (nil error returns nil)
-func Wrap(err error, skips ...int) *StackError {
+//
+// See [WrapN] to use additional caller skip
+func Wrap(err error) error {
 	if err == nil {
 		return nil
 	}
-	st := GetFuncCallerInfo(skips...)
-	return &StackError{error: err, St: st}
-}
-
-func containsErr(args []interface{}) bool {
-	for _, arg := range args {
-		if _, ok := arg.(error); ok {
-			return true
-		}
-	}
-	return false
-}
-
-var DEBUG = false
-
-// Errorf with stack trace from caller. Use %w !
-func Errorf(format string, args ...interface{}) *StackError {
 	st := GetFuncCallerInfo()
-	if len(args) != 0 && !strings.Contains(format, "%w") && containsErr(args) {
-		if DEBUG {
-			panic("stackerr.Errorf must contain %w")
-		} else {
-			log.Printf("stackerr.Errorf must contain %%w")
-		}
+	return &StackError{error: fmt.Errorf("%w", err), St: st}
+}
+
+// WrapN with stack trace from caller's caller (nil error returns nil)
+func WrapN(err error, skip int) *StackError {
+	if err == nil {
+		return nil
 	}
+	st := GetFuncCallerInfo(skip)
+	return &StackError{error: fmt.Errorf("%w", err), St: st}
+}
+
+// Errorf with stack trace from caller. Always use %w to wrap errors
+//
+// example:
+//
+//	return stackerr.Errorf("%w", err)
+//
+// Then elsewhere,
+//
+// > log.Printf("Error: %+v", err)
+func Errorf(format string, args ...interface{}) error {
+	st := GetFuncCallerInfo()
 	return &StackError{error: fmt.Errorf(format, args...), St: st}
 }
 
+// StackError wraps an error and holds the stack trace St ([FuncCallerInfo])
+//
+// Create with [Errorf] or [Wrap] (`stackerr.Errorf("%w", err)`)
+// Print with `%+v` verb (or call err.Stack())
+// Use err.Unwrap() (or errors.Unwrap(err)) to retrieve underlying error
+//
+// Example:
+//
+//	err := foo()
+//	if err != nil {
+//	  return fmt.Errorf("%w", err)
+//	}
+//
+//	in main, `log.Fatalf("%+v", err)`
 type StackError struct {
 	error
-	St FuncCallerInfo
+	St FuncCallerInfo `json:"caller"`
+}
+
+// M do not use
+func M(err error, st FuncCallerInfo) *StackError {
+	return &StackError{error: err, St: st}
 }
 
 var _ error = (*StackError)(nil)
 
+// MarshalText for getting slog package to print %+z mode (no newlines)
+func (s *StackError) MarshalText() ([]byte, error) {
+	x := fmt.Sprintf("%+z", s)
+	return []byte(x), nil
+}
+
+// Format implements [fmt.Formatter]
+//
+// %+v for nice stack trace, %+z for single-line version suitable for slog package
 func (s *StackError) Format(f fmt.State, c rune) {
 	switch c {
-	case 'v':
+	case 'z':
 		if f.Flag('+') {
-			fmt.Fprintf(f, "%+v", s.error)
-			fmt.Fprintf(f, "\n\tfrom %s", s.St.String())
-			//chl, ok := s.error.(*StackError)
-			chld := new(StackError)
-			if errors.As(s.error, &chld) { // recurse
-				fmt.Fprintf(f, "\n\t\t%+v", chld)
+			m := fmt.Sprintf("%+v", s)
+			_, _ = strings.NewReplacer("\n", " ", "\t", "  ").WriteString(f, m)
+			return
+		}
+		fallthrough
+	case 'y': // internal for recursing without first line
+		if f.Flag('+') {
+			_, _ = fmt.Fprintf(f, "from %s", s.St.String())
+			c, ok := errors.AsType[*StackError](s.error)
+			if ok {
+				_, _ = fmt.Fprintf(f, "\n\t%+y", c) // recurse unwrapped
 			}
 			return
 		}
 		fallthrough
+	case 'v':
+		if f.Flag('+') {
+			_, _ = fmt.Fprintf(f, "%+v", s.error)
+			_, _ = fmt.Fprintf(f, "\n\t%+y", s) // recurse
+			return
+		}
+		fallthrough
 	case 's':
-		fmt.Fprint(f, s.Error())
+		_, _ = fmt.Fprint(f, s.Error())
 	case 'q':
-		fmt.Fprintf(f, "%q", s.Error())
+		_, _ = fmt.Fprintf(f, "%q", s.Error())
+	default:
+		panic(fmt.Sprintf("verb %%%c is not supported for stackerr.Error: %v", c, s.error))
 	}
 }
 

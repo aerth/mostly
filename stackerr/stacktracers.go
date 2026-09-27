@@ -1,4 +1,4 @@
-// Copyright (c) 2024 aerth
+// Copyright (c) 2024-2026 aerth
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy of
 // this software and associated documentation files (the "Software"), to deal in
@@ -21,75 +21,44 @@ package stackerr
 
 import (
 	"fmt"
-	"log"
-	"os"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
-	"strings"
+	"time"
 )
 
 type FuncCallerInfo struct {
-	funcname string
-	filetag  string
+	Name string    `json:"name,omitempty"`
+	File string    `json:"file,omitempty"`
+	Line int       `json:"line,omitempty"`
+	Time time.Time `json:"time,omitempty"`
 }
 
 func (fci FuncCallerInfo) String() string {
-	return fmt.Sprintf("%s (%s)", fci.funcname, fci.filetag)
+	return fmt.Sprintf("%s (%s:%d)", fci.Name, filepath.Base(fci.File), fci.Line)
 }
 
 func GetFuncCallerInfo(skips ...int) FuncCallerInfo {
 	if len(skips) > 1 {
 		panic("GetFuncCallerInfo: too many skip arguments")
 	}
-	skip := 2
+	skip := 2 // skip GetFuncCallerInfo and it's caller
 	if len(skips) > 0 {
-		skip += skips[0]
+		skip += skips[0] // and additional
 	}
 	pc, tfile, tline, ok := runtime.Caller(skip) // skip caller of this function
-	details := runtime.FuncForPC(pc)
-	if ok && details != nil {
-		tfile = Cleanmodulepath(tfile)
-		//fmt.Printf("called from %s (%s:%d)\n", filepath.Base(details.Name()), tfile, tline)
+	var details *runtime.Func
+	if ok {
+		details = runtime.FuncForPC(pc)
+	}
+	name := "unknown"
+	if details != nil {
+		// Name() returns something like: github.com/aerth/mostly/stackerr_test.TestError2a
+		name = filepath.Base(details.Name())
 	}
 	return FuncCallerInfo{
-		funcname: filepath.Base(details.Name()),
-		filetag:  fmt.Sprintf("%s:%d", tfile, tline),
+		Name: name,
+		File: tfile,
+		Line: tline,
+		Time: time.Now(),
 	}
-}
-
-// var mainmoduleprefix string
-var mainmodulecmdprefix string
-var mainpwd string
-
-func init() {
-	buildinfo, ok := debug.ReadBuildInfo()
-	if !ok {
-		log.Printf("Failed to read build info")
-		return
-	}
-	// fmt.Println("mainmoduleprefix:", buildinfo.Path)
-	// mainmoduleprefix = buildinfo.Path
-	dir, err := os.Getwd()
-	if err != nil {
-		log.Printf("Failed to get working directory")
-		return
-	}
-	mainpwd = dir
-	mainmodulecmdprefix = buildinfo.Main.Path
-}
-func Cleanmodulepath(p string) string {
-	p1 := p
-	p = strings.TrimPrefix(p, mainmodulecmdprefix)
-	if mainpwd != "/" {
-		p = strings.TrimPrefix(p, mainpwd)
-		if strings.HasSuffix(mainpwd, "/") && !strings.HasPrefix(p, "/") {
-			p = "/" + p
-		}
-	}
-	p = strings.TrimPrefix(p, "/")
-	if p == "" {
-		return p1
-	}
-	return p
 }
