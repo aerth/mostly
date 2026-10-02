@@ -1,3 +1,2 @@
-// mostly might be renamed
-
+// Package mostly might be renamed
 package mostly
