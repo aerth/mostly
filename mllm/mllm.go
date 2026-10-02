@@ -407,13 +407,16 @@ func (ee E) StreamBG(ctx context.Context, messages []Message, think any, handler
 	return ch
 }
 
-// Stream with handlers(only)
+// Stream with handlers(only) or to ee.Writer
 func (ee E) Stream(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) error {
 	if e := ee.ValidateConfig(think); e != nil {
 		return e
 	}
-	if len(handlers) == 0 {
-		handlers = []StreamHandler{StdoutHandler}
+	if len(handlers) == 0 && ee.Writer != nil {
+		handlers = []StreamHandler{NewHandlerOut(ee.Writer, ee.ThinkPre, ee.ThinkPost)}
+	}
+	if len(handlers) == 0 && len(messages) != 0 { // allow no handlers for a ping
+		return Errorf("no stream handlers were given")
 	}
 	// t1 := time.Now()
 	reqBody := ChatRequest{
@@ -455,8 +458,12 @@ func (ee E) Stream(ctx context.Context, messages []Message, think any, handlers 
 		return Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	lines := 0
 	reader := bufio.NewReader(resp.Body)
+	return ee.Read(reader, handlers...)
+}
+
+func (ee E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
+	lines := 0
 	var errs error
 	// stream
 	for {
@@ -521,10 +528,7 @@ func (ee E) Get(ctx context.Context, messages []Message, think any) (ChatRespons
 	//slog := Slog()
 	var chatResp ChatResponse
 	handlers := []StreamHandler{chatResp.Handler}
-	if ee.Writer != nil {
-		handlers = append(handlers, NewHandlerOut(ee.Writer, ee.ThinkPre, ee.ThinkPost))
-	}
-	if ee.Handlers != nil {
+	if len(ee.Handlers) != 0 {
 		handlers = append(handlers, ee.Handlers...)
 	}
 	err := ee.Stream(ctx, messages, think, handlers...)
