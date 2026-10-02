@@ -112,15 +112,17 @@ func TestEmbed3(t *testing.T) {
 func TestGenerateGet(t *testing.T) {
 	ctx := t.Context()
 	for _, thinkVal := range []any{"high", false} {
-		t1 := time.Now()
-		gotFalse, err := mllm.Default().WithTools(nil).Get(ctx, testMessageConvo1(), thinkVal)
-		if err != nil {
-			t.Fatal(err)
-			return
-		}
-		t2 := time.Now()
-		slog.Info("test results got", "think_value", thinkVal, "d", t2.Sub(t1).String())
-		println(gotFalse.SummaryString())
+		t.Run(fmt.Sprintf("GenerateGet(think=%v)", thinkVal), func(t *testing.T) {
+			t1 := time.Now()
+			gotFalse, err := mllm.Default().WithTools(nil).Get(ctx, testMessageConvo1(), thinkVal)
+			if err != nil {
+				t.Fatal(err)
+				return
+			}
+			t2 := time.Now()
+			slog.Info("test results got", "think_value", thinkVal, "d", t2.Sub(t1).String())
+			println(gotFalse.SummaryString())
+		})
 	}
 }
 
@@ -169,15 +171,20 @@ func testMessageConvo1() []mllm.Message {
 
 func TestEmptyA(t *testing.T) {
 	e := mllm.Default()
-	err := <-e.StreamBG(t.Context(), nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := e.Get(t.Context(), nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.Done {
-		t.Fatal("expected Done to be true for empty convo")
-	}
+
+	t.Run("empty streambg", func(t *testing.T) {
+		err := <-e.StreamBG(t.Context(), nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("empty streambg", func(t *testing.T) {
+		got, err := e.Get(t.Context(), nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.Done {
+			t.Fatal("expected Done to be true for empty convo")
+		}
+	})
 }
