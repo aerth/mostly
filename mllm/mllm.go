@@ -496,19 +496,19 @@ func (ee E) Stream(ctx context.Context, messages []Message, think any, handlers 
 }
 
 func (ee E) ValidateConfig(think any) error {
+	var errs error
 	if ee.Model == "" {
-		return fmt.Errorf("missing MODEL")
+		errs = errors.Join(errs, fmt.Errorf("missing MODEL"))
 	}
 	if ee.Host.Scheme == "" || ee.Host.Host == "" {
-		return fmt.Errorf("missing HOST")
+		errs = errors.Join(errs, fmt.Errorf("missing HOST"))
 	}
-
 	_, thinkB := think.(bool)
 	_, thinkS := think.(string)
 	if !thinkB && !thinkS && think != nil {
-		return Errorf("weird think type: %T", think)
+		errs = errors.Join(errs, Errorf("weird think type: %T", think))
 	}
-	return nil
+	return errs
 }
 
 // Get calls [E.Stream] and waits until finished, returning the full ChatResponse

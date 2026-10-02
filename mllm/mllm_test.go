@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,15 @@ func init() {
 	slog.SetDefault(slog.New(
 		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true}),
 	)) // log json to stdout
+}
+
+func TestMain(t *testing.M) {
+	def := mllm.Default()
+	if err := def.ValidateConfig(false); err != nil {
+		println("SKIPPING: mllm tests:", strings.ReplaceAll(err.Error(), "\n", " "))
+		return
+	}
+	os.Exit(t.Run())
 }
 
 func TestExample(t *testing.T) {
