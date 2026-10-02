@@ -228,6 +228,7 @@ type ChatMessage struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// ChatMessages like [Messages] but with additional metadata (for a multi-participant conversation)
 type ChatMessages []ChatMessage
 
 func (cm ChatMessages) ToMessages() []Message {
@@ -244,7 +245,7 @@ func (cm ChatMessages) ToMessages() []Message {
 type ChatMessageFormatter = func(cm ChatMessage) ([]Message, bool)
 
 // ToMessagesFormat returns a **temporary** convo for llm to produce a single new [Message]
-// The returned convo should NEVER be stored (only sent to llm) as the Content is modified.
+// The returned convo should NEVER be stored (only sent to llm) as the Content is modified by formatter.
 func (cm ChatMessages) ToMessagesFormat(fn ChatMessageFormatter) []Message {
 	if fn == nil {
 		fn = DefaultChatMessageFormatter
@@ -286,6 +287,8 @@ func (m Message) ToChatMessage(from string) ChatMessage {
 }
 
 // Add fields of c2 to c for gathering streamed chunks
+//
+// Used in [ChatResponse.Handler]
 func (c Message) Add(c2 Message) Message {
 	if c2.Role != "" {
 		c.Role = c2.Role
@@ -382,13 +385,14 @@ func fflush(w io.Writer) {
 	}
 }
 
-func (c *ChatResponse) Handler(cr ChatResponse) error {
-	c.Message = c.Message.Add(cr.Message)
-	c.Done = cr.Done
-	c.DoneReason = cr.DoneReason
-	if cr.Stats != (Stats{}) {
-		c.Stats = cr.Stats // TODO: add individual fields ?
+// Handler for [E.StreamBG] and [E.Stream]
+func (c *ChatResponse) Handler(in ChatResponse) error {
+	c.Done = in.Done
+	c.DoneReason = in.DoneReason
+	if in.Stats != (Stats{}) {
+		c.Stats = in.Stats
 	}
+	c.Message = c.Message.Add(in.Message)
 	return nil
 }
 
@@ -403,9 +407,13 @@ func (ee E) StreamBG(ctx context.Context, messages []Message, think any, handler
 	return ch
 }
 
+// Stream with handlers(only)
 func (ee E) Stream(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) error {
 	if e := ee.ValidateConfig(think); e != nil {
 		return e
+	}
+	if len(handlers) == 0 {
+		handlers = []StreamHandler{StdoutHandler}
 	}
 	// t1 := time.Now()
 	reqBody := ChatRequest{
@@ -472,18 +480,9 @@ func (ee E) Stream(ctx context.Context, messages []Message, think any, handlers 
 			errs = errors.Join(errs, Errorf("%w", err))
 			continue
 		}
-		if len(handlers) == 0 {
-			if err := StdoutHandler(chunk); err != nil {
-				errs = errors.Join(errs, Errorf("default stdout handler: %w", err))
-				if StopAtFirstHandlerError {
-					return Errorf("%w", errs)
-				}
-			}
-			continue
-		}
 		for i, handler := range handlers {
 			if err := handler(chunk); err != nil {
-				errs = errors.Join(errs, Errorf("handler %d error: %w", i, err))
+				errs = errors.Join(errs, Errorf("handler %d/%d: %w", i+1, len(handlers), err))
 				if StopAtFirstHandlerError {
 					return errs
 				}
@@ -507,12 +506,14 @@ func (ee E) ValidateConfig(think any) error {
 	_, thinkB := think.(bool)
 	_, thinkS := think.(string)
 	if !thinkB && !thinkS && think != nil {
-		return Errorf("weird think")
+		return Errorf("weird think type: %T", think)
 	}
 	return nil
 }
 
 // Get calls [E.Stream] and waits until finished, returning the full ChatResponse
+//
+// Uses [E.Stream], writes stream text to [[E.Writer]] if non-nil, returns full [ChatResponse]
 func (ee E) Get(ctx context.Context, messages []Message, think any) (ChatResponse, error) {
 	if e := ee.ValidateConfig(think); e != nil {
 		return ChatResponse{}, Errorf("%w", e)
@@ -538,15 +539,15 @@ func (st Stats) Summary(w io.Writer) error {
 	return Summary(w, st)
 }
 
-// SummaryString collects [ChatResponse.Statis] into a string
+// SummaryString collects [ChatResponse.Stats] into a string
 func (c ChatResponse) SummaryString() string {
 	return c.Stats.SummaryString()
 }
 
-// SummaryString collects [ChatResponse.Summary] into a string
+// SummaryString collects [ChatResponse.Stats] into a string
 func (st Stats) SummaryString() string {
 	var buf bytes.Buffer
-	Summary(&buf, st)
+	_ = Summary(&buf, st)
 	return buf.String()
 }
 
