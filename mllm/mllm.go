@@ -459,7 +459,12 @@ func (ee E) Stream(ctx context.Context, messages []Message, think any, handlers 
 	}
 
 	reader := bufio.NewReader(resp.Body)
-	return ee.Read(reader, handlers...)
+
+	err = ee.Read(reader, handlers...)
+	if err != nil {
+		return Errorf("%w", err)
+	}
+	return nil
 }
 
 func (ee E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
@@ -467,11 +472,18 @@ func (ee E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 	var errs error
 	// stream
 	for {
+
 		line, err := reader.ReadBytes('\n')
-		lines++
-		if errors.Is(err, io.EOF) {
+		//println("LINE:", string(line))
+		isEOF := errors.Is(err, io.EOF)
+		if isEOF {
+			err = nil
+		}
+		if isEOF && len(line) == 0 {
 			break
 		}
+
+		lines++
 		//slog.Info("got line", "line", json.RawMessage(line), "err", err)
 		if err != nil {
 			return fmt.Errorf("error reading stream: %w", err)
@@ -527,7 +539,12 @@ func (ee E) Get(ctx context.Context, messages []Message, think any) (ChatRespons
 	}
 	//slog := Slog()
 	var chatResp ChatResponse
-	handlers := []StreamHandler{chatResp.Handler}
+	var handlers []StreamHandler
+	if ee.Writer != nil {
+		handlers = []StreamHandler{NewHandlerOut(ee.Writer, ee.ThinkPre, ee.ThinkPost), chatResp.Handler}
+	} else {
+		handlers = []StreamHandler{chatResp.Handler}
+	}
 	if len(ee.Handlers) != 0 {
 		handlers = append(handlers, ee.Handlers...)
 	}

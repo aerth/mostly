@@ -16,8 +16,6 @@ import (
 )
 
 func init() {
-	// NOTE: splitting stderr/stdout streams correctly (for jq) needs compiled test binary (see makefile)
-
 	slog.SetDefault(slog.New(
 		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true}),
 	)) // log json to stdout
@@ -25,6 +23,8 @@ func init() {
 
 func TestMain(t *testing.M) {
 	def := mllm.Default()
+
+	// check for required env vars
 	if err := def.ValidateConfig(false); err != nil {
 		println("SKIPPING: mllm tests:", strings.ReplaceAll(err.Error(), "\n", " "))
 		return
@@ -126,7 +126,10 @@ func TestGenerateGet(t *testing.T) {
 
 func TestStream(t *testing.T) {
 	ctx := t.Context()
-	err := mllm.Default().Stream(ctx, testMessageConvo1(), false)
+
+	e := mllm.Default()
+	e.Writer = os.Stderr
+	err := e.Stream(ctx, testMessageConvo1(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +138,8 @@ func TestStream(t *testing.T) {
 func TestGetWithDefaultStreamHandler(t *testing.T) {
 	old := mllm.DefaultWriter
 	var buf bytes.Buffer
+
+	// Default() will have this writer as a stream handler
 	mllm.DefaultWriter = io.MultiWriter(&buf, os.Stderr) // stream generated output to stderr
 	t.Cleanup(func() {
 		mllm.DefaultWriter = old
@@ -147,7 +152,10 @@ func TestGetWithDefaultStreamHandler(t *testing.T) {
 	}
 	println("finished:", "\n"+got.Message.Content)
 	println(got.SummaryString())
-	if got.Message.Content != buf.String()[:buf.Len()-1] { // stderr has newline after resp.Done
+	if buf.Len() == 0 {
+		return
+	}
+	if got.Message.Content+"\n" != buf.String() { // stderr has newline after resp.Done
 		t.Fatalf("wanted stderr to show same as Get, got: %s", buf.String())
 	}
 }
@@ -156,5 +164,20 @@ func testMessageConvo1() []mllm.Message {
 	return []mllm.Message{
 		{Role: "system", Content: "show a markdown code-fenced python implementation of the required function. no boilerplate/imports/examples/usage"},
 		{Role: "user", Content: "from this golang: add(x int,y int) int"},
+	}
+}
+
+func TestEmptyA(t *testing.T) {
+	e := mllm.Default()
+	err := <-e.StreamBG(t.Context(), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.Get(t.Context(), nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Done {
+		t.Fatal("expected Done to be true for empty convo")
 	}
 }
