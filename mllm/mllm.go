@@ -335,19 +335,22 @@ func StdoutHandler(cr ChatResponse) error {
 	return NewHandlerOut(os.Stdout, DefaultThinkPre, DefaultThinkPost).HandleChat(cr)
 }
 
+var HideThink = false
+
 // NewHandlerOut plain 🍔
 func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler {
 	if w == nil {
 		return func(cr ChatResponse) error { return nil }
 	}
 	reasoning := false
+	hidethink := HideThink
 	return func(cr ChatResponse) error {
 		msg := cr.Message
 		content := msg.Content
 		think := msg.Reasoning
 		done := cr.Done
 
-		if think != "" {
+		if think != "" && !hidethink {
 			if !reasoning {
 				reasoning = true
 				_, _ = fmt.Fprint(w, thinkpre)
@@ -407,6 +410,19 @@ func (ee E) StreamBG(ctx context.Context, messages []Message, think any, handler
 	return ch
 }
 
+func (ee E) NewRequest(messages []Message, think any) *ChatRequest {
+	reqBody := ChatRequest{
+		Model:     ee.Model,
+		Messages:  messages,
+		Stream:    true,
+		Think:     &Think{Value: think},
+		KeepAlive: -1,
+		Options:   ee.Options,
+		Tools:     ee.Tools,
+	}
+	return &reqBody
+}
+
 // Stream with handlers(only) or to ee.Writer
 func (ee E) Stream(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) error {
 	if e := ee.ValidateConfig(think); e != nil {
@@ -419,17 +435,13 @@ func (ee E) Stream(ctx context.Context, messages []Message, think any, handlers 
 		return Errorf("no stream handlers were given")
 	}
 	// t1 := time.Now()
-	reqBody := ChatRequest{
-		Model:     ee.Model,
-		Messages:  messages,
-		Stream:    true,
-		Think:     &Think{Value: think},
-		KeepAlive: -1,
-		Options:   ee.Options,
-		Tools:     ee.Tools,
-	}
 
-	bodyBytes, err := json.Marshal(reqBody)
+	creq := *ee.NewRequest(messages, think)
+	return ee.Do(ctx, creq, handlers)
+}
+
+func (ee E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) error {
+	bodyBytes, err := json.Marshal(creq)
 	if err != nil {
 		return Errorf("failed to marshal request: %w", err)
 	}
