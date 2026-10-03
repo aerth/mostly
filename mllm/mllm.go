@@ -212,7 +212,7 @@ type Stats struct {
 type Message struct {
 	Role       string            `json:"role,omitempty"`
 	Content    string            `json:"content,omitempty"`
-	Reasoning  string            `json:"thinking,omitempty" gorm:"default:default:null"`
+	Reasoning  string            `json:"thinking,omitempty" gorm:"default:null"`
 	ToolCalls  []json.RawMessage `json:"tool_calls,omitempty" gorm:"type:jsonb;serializer:json;default:null;"`
 	ToolName   string            `json:"tool_name,omitempty" gorm:"default:null"`
 	ToolCallID string            `json:"tool_call_id,omitempty" gorm:"default:null"`
@@ -467,7 +467,8 @@ func (ee E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return Errorf("unexpected status code: %d", resp.StatusCode)
+		b, _ := io.ReadAll(resp.Body)
+		return Errorf("unexpected status code: %d %s", resp.StatusCode, string(b))
 	}
 
 	reader := bufio.NewReader(resp.Body)
