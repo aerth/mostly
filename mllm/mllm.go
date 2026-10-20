@@ -114,29 +114,29 @@ var (
 // NewE custom NewEndpoint
 var NewE = NewEndpoint
 
-func (ee E) WithoutTools() E {
-	ee.Tools = nil
-	return ee
+func (e E) WithoutTools() E {
+	e.Tools = nil
+	return e
 }
 
-func (ee E) WithTools(tools ...json.Marshaler) E {
-	ee.Tools = tools
-	return ee
+func (e E) WithTools(tools ...json.Marshaler) E {
+	e.Tools = tools
+	return e
 }
 
-func (ee E) AddHandlers(h ...StreamHandler) E {
-	ee.Handlers = append(slices.Clone(ee.Handlers), h...)
-	return ee
+func (e E) AddHandlers(h ...StreamHandler) E {
+	e.Handlers = append(slices.Clone(e.Handlers), h...)
+	return e
 }
 
-func (ee E) WithHandlers(h ...StreamHandler) E {
-	ee.Handlers = h
-	return ee
+func (e E) WithHandlers(h ...StreamHandler) E {
+	e.Handlers = h
+	return e
 }
 
-func (ee E) WithOptions(options *Options) E {
-	ee.Options = options
-	return ee
+func (e E) WithOptions(options *Options) E {
+	e.Options = options
+	return e
 }
 
 // Think Value should be one of: nil,"low","medium","high",true,false
@@ -220,6 +220,71 @@ type Message struct {
 }
 type Messages []Message
 
+func (m Messages) Top() Message {
+	l := len(m)
+	if l == 0 {
+		return Message{}
+	}
+	return m[l-1]
+}
+
+func (m Messages) TopN(n int) Messages {
+	l := len(m)
+	if l == 0 {
+		return nil
+	}
+	if l <= n {
+		return m
+	}
+	return m[l-n:]
+}
+
+func (cm Messages) TopRole(role string) Message {
+	l := len(cm)
+	if l == 0 {
+		return Message{}
+	}
+	for i := range cm {
+		if cm[l-i].Role == role {
+			return cm[i]
+		}
+	}
+	return Message{}
+}
+
+func (cm ChatMessages) Top() ChatMessage {
+	l := len(cm)
+	if l == 0 {
+		return ChatMessage{}
+	}
+	return cm[l-1]
+}
+
+func (cm ChatMessages) TopN(n int) ChatMessages {
+	l := len(cm)
+	if l == 0 {
+		return nil
+	}
+	if l <= n {
+		return cm
+	}
+	return cm[l-n:]
+}
+
+func (cm ChatMessages) TopRole(role string) ChatMessage {
+	l := len(cm)
+	if l == 0 {
+		return ChatMessage{}
+	}
+	l -= 1
+	for i := range cm {
+		if cm[l-i].Role == role {
+			return cm[i]
+		}
+	}
+	return ChatMessage{}
+}
+
 // ChatMessage is a [Message] but with additional metadata (for a multi-participant conversation)
 type ChatMessage struct {
 	UUID uuid.UUID `json:"uuid,omitempty" gorm:"uniqueIndex"`
@@ -231,8 +296,8 @@ type ChatMessage struct {
 // ChatMessages like [Messages] but with additional metadata (for a multi-participant conversation)
 type ChatMessages []ChatMessage
 
-func (cm ChatMessages) ToMessages() []Message {
-	a := make([]Message, len(cm))
+func (cm ChatMessages) ToMessages() Messages {
+	a := make(Messages, len(cm))
 	for i := range cm {
 		a[i] = cm[i].Message
 	}
