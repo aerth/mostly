@@ -332,7 +332,7 @@ var DefaultChatMessageFormatter = func(cm ChatMessage) ([]Message, bool) {
 }
 var _ ChatMessageFormatter = DefaultChatMessageFormatter
 
-// NewChatMessage from.
+// NewChatMessage from (see also [Message.ToChatMessage])
 func NewChatMessage(from string, role string, text string) ChatMessage {
 	m := Message{Role: role, Content: text}
 	return m.ToChatMessage(from)
@@ -354,36 +354,36 @@ func (m Message) ToChatMessage(from string) ChatMessage {
 // Add fields of c2 to c for gathering streamed chunks
 //
 // Used in [ChatResponse.Handler]
-func (c Message) Add(c2 Message) Message {
-	if c2.Role != "" {
-		c.Role = c2.Role
+func (m Message) Add(m2 Message) Message {
+	if m2.Role != "" {
+		m.Role = m2.Role
 	}
-	c.Content += c2.Content
-	c.Reasoning += c2.Reasoning
-	if len(c2.ToolCalls) != 0 {
-		c.ToolCalls = append(c.ToolCalls, c2.ToolCalls...)
+	m.Content += m2.Content
+	m.Reasoning += m2.Reasoning
+	if len(m2.ToolCalls) != 0 {
+		m.ToolCalls = append(m.ToolCalls, m2.ToolCalls...)
 	}
-	if c2.ToolName != "" {
-		c.ToolName = c2.ToolName
+	if m2.ToolName != "" {
+		m.ToolName = m2.ToolName
 	}
-	if c2.ToolCallID != "" {
-		c.ToolCallID = c2.ToolCallID
+	if m2.ToolCallID != "" {
+		m.ToolCallID = m2.ToolCallID
 	}
-	if len(c2.Images) != 0 {
-		c.Images = append(c.Images, c2.Images...)
+	if len(m2.Images) != 0 {
+		m.Images = append(m.Images, m2.Images...)
 	}
-	return c
+	return m
 }
 
-func (c Message) IsEmpty() bool {
-	return c.Content == "" && c.Reasoning == "" && c.Role == "" && len(c.ToolCalls) == 0
+func (m Message) IsEmpty() bool {
+	return m.Content == "" && m.Reasoning == "" && m.Role == "" && len(m.ToolCalls) == 0
 }
 
-func (c Message) Equal(c2 Message) bool {
-	return c.Content == c2.Content && c.Reasoning == c2.Reasoning && c.Role == c2.Role &&
-		c.ToolName == c2.ToolName && c.ToolCallID == c2.ToolCallID &&
-		slices.EqualFunc(c.ToolCalls, c2.ToolCalls, bytesEqual) &&
-		slices.EqualFunc(c.Images, c2.Images, bytesEqual)
+func (m Message) Equal(m2 Message) bool {
+	return m.Content == m2.Content && m.Reasoning == m2.Reasoning && m.Role == m2.Role &&
+		m.ToolName == m2.ToolName && m.ToolCallID == m2.ToolCallID &&
+		slices.EqualFunc(m.ToolCalls, m2.ToolCalls, bytesEqual) &&
+		slices.EqualFunc(m.Images, m2.Images, bytesEqual)
 }
 
 func bytesEqual[T ~[]byte](a, b T) bool {
