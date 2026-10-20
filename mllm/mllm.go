@@ -465,67 +465,68 @@ func (c *ChatResponse) Handler(in ChatResponse) error {
 }
 
 // StreamBG uses Stream, closing ch after streaming is finished, sending non-nil error to the channel
-func (ee E) StreamBG(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) chan error {
+func (e E) StreamBG(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) chan error {
 	ch := make(chan error)
 	go func() {
-		err := ee.Stream(ctx, messages, think, handlers...)
+		err := e.Stream(ctx, messages, think, handlers...)
 		ch <- err // may be nil
 		close(ch)
 	}()
 	return ch
 }
 
-func (ee E) NewRequest(messages []Message, think any) *ChatRequest {
+// NewRequest creates a [ChatRequest] adds e.Model, e.Tools, and e.Options
+func (e E) NewRequest(messages []Message, think any) *ChatRequest {
 	reqBody := ChatRequest{
-		Model:     ee.Model,
+		Model:     e.Model,
 		Messages:  messages,
 		Stream:    true,
 		Think:     &Think{Value: think},
 		KeepAlive: -1,
-		Options:   ee.Options,
-		Tools:     ee.Tools,
+		Options:   e.Options,
+		Tools:     e.Tools,
 	}
 	return &reqBody
 }
 
 // Stream with handlers(only) or to ee.Writer
-func (ee E) Stream(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) error {
-	if e := ee.ValidateConfig(think); e != nil {
+func (e E) Stream(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) error {
+	if e := e.ValidateConfig(think); e != nil {
 		return e
 	}
-	if len(handlers) == 0 && ee.Writer != nil {
-		handlers = []StreamHandler{NewHandlerOut(ee.Writer, ee.ThinkPre, ee.ThinkPost)}
+	if len(handlers) == 0 && e.Writer != nil {
+		handlers = []StreamHandler{NewHandlerOut(e.Writer, e.ThinkPre, e.ThinkPost)}
 	}
 	if len(handlers) == 0 && len(messages) != 0 { // allow no handlers for a ping
 		return Errorf("no stream handlers were given")
 	}
 	// t1 := time.Now()
 
-	creq := *ee.NewRequest(messages, think)
-	return ee.Do(ctx, creq, handlers)
+	creq := *e.NewRequest(messages, think)
+	return e.Do(ctx, creq, handlers)
 }
 
-func (ee E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) error {
+func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) error {
 	bodyBytes, err := json.Marshal(creq)
 	if err != nil {
 		return Errorf("failed to marshal request: %w", err)
 	}
-	if ee.Options != nil && ee.Options.Debug {
+	if e.Options != nil && e.Options.Debug {
 		slog.Debug("sending body", "js", json.RawMessage(bodyBytes))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", ee.Host.String()+"/api/chat", bytes.NewBuffer(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", e.Host.String()+"/api/chat", bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	for k, v := range ee.Headers {
+	for k, v := range e.Headers {
 		req.Header.Set(k, v)
 	}
 
 	// send it
-	resp, err := ee.Client.Do(req)
+	resp, err := e.Client.Do(req)
 	if err != nil {
 		return Errorf("request failed: %w", err)
 	}
@@ -538,14 +539,14 @@ func (ee E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) 
 
 	reader := bufio.NewReader(resp.Body)
 
-	err = ee.Read(reader, handlers...)
+	err = e.Read(reader, handlers...)
 	if err != nil {
 		return Errorf("%w", err)
 	}
 	return nil
 }
 
-func (ee E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
+func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 	lines := 0
 	var errs error
 	// stream
@@ -592,12 +593,12 @@ func (ee E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 	return errs
 }
 
-func (ee E) ValidateConfig(think any) error {
+func (e E) ValidateConfig(think any) error {
 	var errs error
-	if ee.Model == "" {
+	if e.Model == "" {
 		errs = errors.Join(errs, fmt.Errorf("missing MODEL"))
 	}
-	if ee.Host.Scheme == "" || ee.Host.Host == "" {
+	if e.Host.Scheme == "" || e.Host.Host == "" {
 		errs = errors.Join(errs, fmt.Errorf("missing HOST"))
 	}
 	_, thinkB := think.(bool)
@@ -608,25 +609,30 @@ func (ee E) ValidateConfig(think any) error {
 	return errs
 }
 
+func (e E) Chat(ctx context.Context, messages ChatMessages, think any) (ChatMessage, error) {
+	x, err := e.Get(ctx, messages.ToMessages(), think)
+	return x.Message.ToChatMessage(""), err
+}
+
 // Get calls [E.Stream] and waits until finished, returning the full ChatResponse
 //
 // Uses [E.Stream], writes stream text to [[E.Writer]] if non-nil, returns full [ChatResponse]
-func (ee E) Get(ctx context.Context, messages []Message, think any) (ChatResponse, error) {
-	if e := ee.ValidateConfig(think); e != nil {
+func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse, error) {
+	if e := e.ValidateConfig(think); e != nil {
 		return ChatResponse{}, Errorf("%w", e)
 	}
 	//slog := Slog()
 	var chatResp ChatResponse
 	var handlers []StreamHandler
-	if ee.Writer != nil {
-		handlers = []StreamHandler{NewHandlerOut(ee.Writer, ee.ThinkPre, ee.ThinkPost), chatResp.Handler}
+	if e.Writer != nil {
+		handlers = []StreamHandler{NewHandlerOut(e.Writer, e.ThinkPre, e.ThinkPost), chatResp.Handler}
 	} else {
 		handlers = []StreamHandler{chatResp.Handler}
 	}
-	if len(ee.Handlers) != 0 {
-		handlers = append(handlers, ee.Handlers...)
+	if len(e.Handlers) != 0 {
+		handlers = append(handlers, e.Handlers...)
 	}
-	err := ee.Stream(ctx, messages, think, handlers...)
+	err := e.Stream(ctx, messages, think, handlers...)
 	if err != nil {
 		return chatResp, Errorf("%w", err)
 	}
