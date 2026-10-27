@@ -120,7 +120,11 @@ func (e E) WithoutTools() E {
 }
 
 func (e E) WithTools(tools ...json.Marshaler) E {
-	e.Tools = tools
+	if len(tools) == 0 && tools[0] == nil {
+		e.Tools = nil
+	} else {
+		e.Tools = tools
+	}
 	return e
 }
 
