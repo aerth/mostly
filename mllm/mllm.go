@@ -488,7 +488,9 @@ func (e E) NewRequest(messages []Message, think any) *ChatRequest {
 		Think:     &Think{Value: think},
 		KeepAlive: -1,
 		Options:   e.Options,
-		Tools:     e.Tools,
+		Tools: slices.DeleteFunc(slices.Compact(e.Tools), func(v json.Marshaler) bool {
+			return v == nil
+		}),
 	}
 	return &reqBody
 }
