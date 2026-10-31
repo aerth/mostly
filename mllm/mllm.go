@@ -224,22 +224,27 @@ type Think struct {
 }
 type Value = any
 
+var ThinkRequestType = false
+
 // MarshalJSON implements [json.Marshaler] for sending request
 func (t Think) MarshalJSON() ([]byte, error) {
 	tv := t.Value
 	if tv == nil {
 		return json.Marshal(nil)
 	}
-	if v, ok := tv.(string); ok {
-		return json.Marshal(map[string]any{"effort": v})
-	}
-	if v, ok := tv.(bool); ok {
+	if _, ok := tv.(string); ok {
+	} else if v, ok := tv.(bool); ok {
 		if !v {
-			return json.Marshal(map[string]any{"effort": "none"})
+			tv = "none"
 		}
-		return json.Marshal(map[string]any{"effort": v})
+	} else {
+		return nil, fmt.Errorf("unknown think type %T", t.Value)
 	}
-	return nil, fmt.Errorf("unknown think type %T", t.Value)
+	if ThinkRequestType {
+		return json.Marshal(map[string]any{"effort": tv})
+	} else {
+		return json.Marshal(tv)
+	}
 }
 
 // ChatRequest sent to LLM
@@ -247,7 +252,7 @@ type ChatRequest struct {
 	Model     string           `json:"model,omitempty"`
 	Messages  []Message        `json:"messages,omitempty"`
 	Stream    bool             `json:"stream"`
-	Think     *Think           `json:"reasoning,omitempty"` // ollama endpoint "think" but /v1/chat/completions is "thinking"
+	Think     *Think           `json:"reasoning_effort,omitempty"` // ollama endpoint "think" but /v1/chat/completions is "thinking"
 	KeepAlive int              `json:"keep_alive,omitempty"`
 	Tools     []json.Marshaler `json:"tools,omitempty"`
 	*Options  `gorm:"type:jsonb;serializer:json;default:null"`
@@ -312,6 +317,7 @@ type Message struct {
 	Content    string            `json:"content,omitempty"`
 	Reasoning  string            `json:"thinking,omitempty" gorm:"default:null"`
 	Reasoning2 string            `json:"reasoning,omitempty" gorm:"-"` // Internal, DO NOT USE
+	Reasoning3 string            `json:"reasoning_content,omitempty" gorm:"-"`
 	ToolCalls  []json.RawMessage `json:"tool_calls,omitempty" gorm:"type:jsonb;serializer:json;default:null;"`
 	ToolName   string            `json:"tool_name,omitempty" gorm:"default:null"`
 	ToolCallID string            `json:"tool_call_id,omitempty" gorm:"default:null"`
@@ -704,8 +710,11 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 			continue
 		}
 		if post, ok := bytes.CutPrefix(trimmedLine, []byte("data: ")); ok {
-			trimmedLine = post
+			trimmedLine = bytes.TrimSpace(post)
 			modeP1 = true
+		}
+		if len(trimmedLine) == 0 {
+			continue
 		}
 
 		var chunk ChatResponse
@@ -727,6 +736,10 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 				chunk.Message.Reasoning = chunk.Message.Reasoning2
 				chunk.Message.Reasoning2 = ""
 			}
+			if chunk.Message.Reasoning3 != "" {
+				chunk.Message.Reasoning = chunk.Message.Reasoning3
+				chunk.Message.Reasoning3 = ""
+			}
 			for i := range chunk.Choices {
 				choice := &chunk.Choices[i]
 				if chunk.DoneReason2 != "" {
@@ -735,7 +748,12 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 					chunk.DoneReason2 = ""
 				}
 				//	slog.Info("handling delta", "d", chunk.Choices[i].Delta)
-				choice.Delta.Reasoning = chunk.Choices[i].Delta.Reasoning2
+
+				if choice.Delta.Reasoning3 != "" {
+					choice.Delta.Reasoning = choice.Delta.Reasoning3
+				} else if choice.Delta.Reasoning2 != "" {
+					choice.Delta.Reasoning = choice.Delta.Reasoning2
+				}
 
 				choice.Delta.Reasoning2 = ""
 				if ptr := choice.FinishReason; ptr != nil {
@@ -745,8 +763,8 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 				chunk.Message = chunk.Message.Add(choice.Delta)
 				//	slog.Info("added delta", "c", chunk.Choices[i].Delta)
 				if !chunk.Done && chunk.Message.IsEmpty() {
-					slog.Info("handling delta", "d", chunk.Choices[i].Delta, "line", string(trimmedLine), "chunk", chunk)
-					return fmt.Errorf("could not ")
+					//slog.Info("handling delta", "d", chunk.Choices[i].Delta, "line", string(trimmedLine), "chunk", chunk)
+					continue
 				}
 			}
 			chunk.Choices = nil
@@ -790,6 +808,11 @@ func (e E) ValidateConfig(think any) error {
 func (e E) Chat(ctx context.Context, messages ChatMessages, think any) (ChatMessage, error) {
 	x, err := e.Get(ctx, messages.ToMessages(), think)
 	return x.Message.ToChatMessage(""), err
+}
+
+func (e E) GetMessage(ctx context.Context, messages []Message, think any) (Message, error) {
+	x, err := e.Get(ctx, messages, think)
+	return x.Message, err
 }
 
 // Get calls [E.Stream] and waits until finished, returning the full ChatResponse

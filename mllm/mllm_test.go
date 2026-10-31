@@ -135,10 +135,12 @@ func TestEmbed3(t *testing.T) {
 
 func TestGenerateGetThink(t *testing.T) {
 	ctx := t.Context()
-	for _, thinkVal := range []any{"high", false} {
+	for _, thinkVal := range []any{false, "high", false} {
 		t.Run(fmt.Sprintf("GenerateGet(think=%v)", thinkVal), func(t *testing.T) {
+			client := mllm.Default()
+			client.Writer = os.Stderr
 			t1 := time.Now()
-			gotFalse, err := mllm.Default().
+			got, err := client.
 				WithTools(nil).Get(ctx, testMessageConvo1(), thinkVal)
 			if err != nil {
 				t.Fatal(err)
@@ -146,7 +148,7 @@ func TestGenerateGetThink(t *testing.T) {
 			}
 			t2 := time.Now()
 			slog.Info("test results got", "think_value", thinkVal, "d", t2.Sub(t1).String())
-			println(gotFalse.SummaryString())
+			println(got.SummaryString())
 		})
 	}
 }
