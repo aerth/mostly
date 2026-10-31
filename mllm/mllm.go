@@ -29,18 +29,80 @@ type E struct {
 
 	// optional
 
-	Client  *http.Client      // custom http client (optional)
-	Headers map[string]string // custom headers (optional)
+	Client  *http.Client      `json:"-"` // custom http client (optional)
+	Headers map[string]string `json:"-"` // custom headers (optional)
 	Tools   []json.Marshaler  // Bring your own tools (optional)
 	Options *Options          // e options (optional)
 
 	// Writer if non-nil will be automatically added as a stream handler to [[E.Get]] and [[E.Stream]]
-	Writer    io.Writer
-	ThinkPre  string // optional, default used in [NewEndpoint]
-	ThinkPost string // optional, default used in [NewEndpoint]
+	Writer    io.Writer `json:"-"`
+	ThinkPre  string    // optional, default used in [NewEndpoint]
+	ThinkPost string    // optional, default used in [NewEndpoint]
 
 	// Handlers added to all requests
-	Handlers []StreamHandler
+	Handlers []StreamHandler `json:"-"`
+}
+
+type Tool struct {
+	Spec json.RawMessage
+	Exec any `json:"-"`
+}
+
+type RawToolCall = Call[json.RawMessage]
+
+// Call is for a tool-runner to decode arguments. It handles the case where Arguments json object is passed as a json string.
+type Call[T any] struct {
+	ID       string `json:"id"`
+	Index    int    `json:"index"`
+	Type     string `json:"type"` // "function" always?
+	Function struct {
+		Name      string `json:"name"`
+		Arguments T      `json:"arguments,omitempty"`
+	} `json:"function"`
+}
+
+func (t Tool) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{"type": "function", "function": t.Spec})
+}
+
+func (c *Call[T]) UnmarshalJSON(b []byte) error {
+	type plain Call[json.RawMessage]
+	var x plain
+	err := json.Unmarshal(b, &x)
+	if err != nil {
+		return err
+	}
+	var args T
+	if x.Function.Arguments[0] != '"' {
+		type plain2 Call[T]
+		var x2 plain2
+		err := json.Unmarshal(b, &x2)
+		if err != nil {
+			return err
+		}
+		*c = Call[T](x2)
+		return nil
+	}
+	{
+		var z string
+		err = json.Unmarshal(x.Function.Arguments, &z)
+		if err != nil {
+			return err
+		}
+		x.Function.Arguments = json.RawMessage(z)
+	}
+	err = json.Unmarshal(x.Function.Arguments, &args)
+	if err != nil {
+		return err
+	}
+	*c = Call[T]{
+		ID:    x.ID,
+		Index: x.Index,
+		Type:  x.Type,
+	}
+	c.Function.Name = x.Function.Name
+	c.Function.Arguments = args
+	return nil
 }
 
 type (
@@ -56,12 +118,13 @@ func (c StreamHandler) HandleChat(cr ChatResponse) error {
 
 var (
 	DefaultThinkPre  = "Thinking:\n"
-	DefaultThinkPost = "\n\n... done thinking.\n\n"
+	DefaultThinkPost = "\n... done thinking.\n"
 )
 
 var (
 	EnvModel = []string{"MLLM_MODEL", "OLLAMA_MODEL", "LLM_MODEL"}
 	EnvHost  = []string{"MLLM_HOST", "OLLAMA_HOST", "LLM_HOST"}
+	EnvKey   = []string{"MLLM_API_KEY", "OLLAMA_API_KEY", "LLM_API_KEY"}
 )
 
 var (
@@ -79,22 +142,34 @@ func firstEnv(k []string) string {
 	return ""
 }
 
+var ForcePath = false
+
 // NewEndpoint reads env and returns a new reusable Endpoint
 //
 // See [E.StreamBG] or [E.Stream] or [E.Get]
 func NewEndpoint(options *Options, tools []json.Marshaler) E {
 	model := firstEnv(EnvModel)
 	host := firstEnv(EnvHost)
+	k := firstEnv(EnvKey)
 	var hostURL url.URL
 	if host != "" {
 		u, _ := url.Parse(host)
 		if u != nil {
 			hostURL = *u
+			if !ForcePath && (hostURL.Path == "" || hostURL.Path == "/") {
+				hostURL.Path = "/v1/chat/completions"
+			}
 		} else {
 			Slog().Error("parsing url failed, check env: " + EnvModel[0]) // dont print err
 		}
 	}
-	return E{Host: hostURL, Model: model, Client: http.DefaultClient, Options: options, Tools: tools, Writer: DefaultWriter, ThinkPre: DefaultThinkPre, ThinkPost: DefaultThinkPost, Headers: nil, Handlers: nil}
+	var hdr map[string]string
+	if k != "" {
+		hdr = map[string]string{
+			"Authorization": "Bearer " + k,
+		}
+	}
+	return E{Host: hostURL, Model: model, Client: http.DefaultClient, Options: options, Tools: tools, Writer: DefaultWriter, ThinkPre: DefaultThinkPre, ThinkPost: DefaultThinkPost, Headers: hdr, Handlers: nil}
 }
 
 // DefaultWriter added to all new endpoints
@@ -120,7 +195,7 @@ func (e E) WithoutTools() E {
 }
 
 func (e E) WithTools(tools ...json.Marshaler) E {
-	if len(tools) == 0 && tools[0] == nil {
+	if tools == nil || len(tools) == 0 && tools[0] == nil {
 		e.Tools = nil
 	} else {
 		e.Tools = tools
@@ -145,8 +220,9 @@ func (e E) WithOptions(options *Options) E {
 
 // Think Value should be one of: nil,"low","medium","high",true,false
 type Think struct {
-	Value any
+	Value `json:"-"`
 }
+type Value = any
 
 // MarshalJSON implements [json.Marshaler] for sending request
 func (t Think) MarshalJSON() ([]byte, error) {
@@ -155,10 +231,13 @@ func (t Think) MarshalJSON() ([]byte, error) {
 		return json.Marshal(nil)
 	}
 	if v, ok := tv.(string); ok {
-		return json.Marshal(v)
+		return json.Marshal(map[string]any{"effort": v})
 	}
 	if v, ok := tv.(bool); ok {
-		return json.Marshal(v)
+		if !v {
+			return json.Marshal(map[string]any{"effort": "none"})
+		}
+		return json.Marshal(map[string]any{"effort": v})
 	}
 	return nil, fmt.Errorf("unknown think type %T", t.Value)
 }
@@ -168,10 +247,10 @@ type ChatRequest struct {
 	Model     string           `json:"model,omitempty"`
 	Messages  []Message        `json:"messages,omitempty"`
 	Stream    bool             `json:"stream"`
-	Think     *Think           `json:"think,omitempty"`
+	Think     *Think           `json:"reasoning,omitempty"` // ollama endpoint "think" but /v1/chat/completions is "thinking"
 	KeepAlive int              `json:"keep_alive,omitempty"`
 	Tools     []json.Marshaler `json:"tools,omitempty"`
-	Options   *Options         `json:"options,omitempty"`
+	*Options  `gorm:"type:jsonb;serializer:json;default:null"`
 }
 
 // Options for ChatRequest
@@ -195,12 +274,22 @@ type Options struct {
 //	err := <-mllm.Default().StreamBG(ctx, mllm.Messages{{Role: "user", Content: "hi"}}, false, cr.Handler)
 //	println("Bot:", cr.Message.Content)
 type ChatResponse struct {
-	Model      string          `json:"model"`
-	Created    json.RawMessage `json:"created_at,omitempty"`
-	Done       bool            `json:"done"` // for stream
-	DoneReason string          `json:"done_reason,omitempty"`
-	Message    Message         `json:"message"` // for stream, handlers
-	Stats      `gorm:"embedded"`
+	LLMID string `json:"id,omitempty" gorm:"-"`
+	//	Object string
+	Model       string          `json:"model"`
+	Created     json.RawMessage `json:"created,omitempty"`
+	Done        bool            `json:"done"` // for stream
+	DoneReason  string          `json:"done_reason,omitempty"`
+	DoneReason2 string          `json:"finish_reason,omitempty" gorm:"-"` // INTERNAL do not use
+	Message     Message         `json:"message"`                          // for stream, handlers
+	Stats       `gorm:"embedded"`
+	Choices     []Choice `json:"choices,omitempty"` // INTERNAL do not use
+}
+
+type Choice struct {
+	Index        int     `json:"index"`
+	FinishReason *string `json:"finish_reason,omitempty"`
+	Delta        Message `json:"delta"`
 }
 
 // Stats has [Stats.String]
@@ -211,12 +300,18 @@ type Stats struct {
 	TotalDuration      time.Duration `json:"total_duration,omitempty"`
 	PromptEvalCount    int           `json:"prompt_eval_count,omitempty"`
 	EvalCount          int           `json:"eval_count,omitempty"`
+	Usage
+}
+type Usage struct {
+	TotalTokens  int `json:"total_tokens,omitempty"`
+	PromptTokens int `json:"prompt_tokens,omitempty"`
 }
 
 type Message struct {
 	Role       string            `json:"role,omitempty"`
 	Content    string            `json:"content,omitempty"`
 	Reasoning  string            `json:"thinking,omitempty" gorm:"default:null"`
+	Reasoning2 string            `json:"reasoning,omitempty" gorm:"-"` // Internal, DO NOT USE
 	ToolCalls  []json.RawMessage `json:"tool_calls,omitempty" gorm:"type:jsonb;serializer:json;default:null;"`
 	ToolName   string            `json:"tool_name,omitempty" gorm:"default:null"`
 	ToolCallID string            `json:"tool_call_id,omitempty" gorm:"default:null"`
@@ -243,14 +338,14 @@ func (m Messages) TopN(n int) Messages {
 	return m[l-n:]
 }
 
-func (cm Messages) TopRole(role string) Message {
-	l := len(cm)
+func (m Messages) TopRole(role string) Message {
+	l := len(m)
 	if l == 0 {
 		return Message{}
 	}
-	for i := range cm {
-		if cm[l-i].Role == role {
-			return cm[i]
+	for i := range m {
+		if m[l-i].Role == role {
+			return m[i]
 		}
 	}
 	return Message{}
@@ -291,7 +386,7 @@ func (cm ChatMessages) TopRole(role string) ChatMessage {
 
 // ChatMessage is a [Message] but with additional metadata (for a multi-participant conversation)
 type ChatMessage struct {
-	UUID uuid.UUID `json:"uuid,omitempty" gorm:"uniqueIndex"`
+	MessageID uuid.UUID `gorm:"type:uuid;primaryKey;default:null;" json:"message_id,omitempty"` // MessageID is unique identifier for each message
 	Message
 	From      string    `json:"from,omitempty" gorm:"default:null"`
 	CreatedAt time.Time `json:"created_at"`
@@ -347,7 +442,7 @@ func NewChatMessage(from string, role string, text string) ChatMessage {
 // [ChatMessage] MAY be stored (NOT plain [Message])
 func (m Message) ToChatMessage(from string) ChatMessage {
 	m2 := ChatMessage{
-		UUID:      uuid.New(),
+		MessageID: uuid.New(),
 		Message:   m,
 		From:      from,
 		CreatedAt: time.Now().Truncate(time.Millisecond),
@@ -364,6 +459,9 @@ func (m Message) Add(m2 Message) Message {
 	}
 	m.Content += m2.Content
 	m.Reasoning += m2.Reasoning
+	if m2.Reasoning2 != "" {
+		panic("oops")
+	}
 	if len(m2.ToolCalls) != 0 {
 		m.ToolCalls = append(m.ToolCalls, m2.ToolCalls...)
 	}
@@ -404,7 +502,11 @@ func StdoutHandler(cr ChatResponse) error {
 	return NewHandlerOut(os.Stdout, DefaultThinkPre, DefaultThinkPost).HandleChat(cr)
 }
 
-var HideThink = false
+var (
+	HideThink = false
+	HideTools = false
+	DebugLLM  = os.Getenv("DEBUG_LLM") == "1"
+)
 
 // NewHandlerOut plain 🍔
 func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler {
@@ -413,6 +515,8 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 	}
 	reasoning := false
 	hidethink := HideThink
+	hidetools := HideTools
+	var calls []json.RawMessage
 	return func(cr ChatResponse) error {
 		msg := cr.Message
 		content := msg.Content
@@ -437,16 +541,31 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 			_, _ = fmt.Fprint(w, content)
 			fflush(w)
 		}
+		if !hidetools && len(cr.Message.ToolCalls) != 0 {
+			calls = append(calls, cr.Message.ToolCalls...)
+		}
 		if done {
 			if reasoning { // rare but, could be 'cancelled' or other done with no content TODO: check done reason
 				_, _ = fmt.Fprint(w, thinkpost)
 			}
-			_, _ = fmt.Fprint(w, "\n")
+			if len(calls) != 0 && ToolWriter != nil {
+				for i := range calls {
+					_ = ToolWriter(w, calls[i])
+				}
+			} else { // toolwriter should print new line
+				_, _ = fmt.Fprint(w, "\n")
+			}
 			fflush(w)
 		}
 
 		return nil
 	}
+}
+
+var ToolWriter = toolWriter
+
+func toolWriter(w io.Writer, rawMessage json.RawMessage) (err error) {
+	return json.NewEncoder(w).Encode(map[string]any{"tool_call": rawMessage})
 }
 
 func fflush(w io.Writer) {
@@ -458,6 +577,8 @@ func fflush(w io.Writer) {
 }
 
 // Handler for [E.StreamBG] and [E.Stream]
+//
+// Is a [StreamHandler] to gather [Message]
 func (c *ChatResponse) Handler(in ChatResponse) error {
 	c.Done = in.Done
 	c.DoneReason = in.DoneReason
@@ -468,7 +589,7 @@ func (c *ChatResponse) Handler(in ChatResponse) error {
 	return nil
 }
 
-// StreamBG uses Stream, closing ch after streaming is finished, sending non-nil error to the channel
+// StreamBG uses [E.Stream], closing ch after streaming is finished, sending non-nil error to the channel
 func (e E) StreamBG(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) chan error {
 	ch := make(chan error)
 	go func() {
@@ -488,15 +609,20 @@ func (e E) NewRequest(messages []Message, think any) *ChatRequest {
 		Think:     &Think{Value: think},
 		KeepAlive: -1,
 		Options:   e.Options,
-		Tools: slices.DeleteFunc(slices.Compact(e.Tools), func(v json.Marshaler) bool {
+		Tools: slices.DeleteFunc(slices.Clone(e.Tools), func(v json.Marshaler) bool {
 			return v == nil
 		}),
 	}
 	return &reqBody
 }
 
-// Stream with handlers(only) or to ee.Writer
+var ErrNoConvo = errors.New("no messages in conversation")
+
+// Stream with handlers(only) or to [E.Writer], calls [E.Do]
 func (e E) Stream(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) error {
+	if len(messages) == 0 {
+		return Errorf("%w", ErrNoConvo)
+	}
 	if e := e.ValidateConfig(think); e != nil {
 		return e
 	}
@@ -512,16 +638,17 @@ func (e E) Stream(ctx context.Context, messages []Message, think any, handlers .
 	return e.Do(ctx, creq, handlers)
 }
 
+// Do sends a [ChatRequest] and streams response in [E.Read]
 func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) error {
 	bodyBytes, err := json.Marshal(creq)
 	if err != nil {
 		return Errorf("failed to marshal request: %w", err)
 	}
 	if e.Options != nil && e.Options.Debug {
-		slog.Debug("sending body", "js", json.RawMessage(bodyBytes))
+		slog.Info("sending body", "js", json.RawMessage(bodyBytes))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", e.Host.String()+"/api/chat", bytes.NewBuffer(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", e.Host.String(), bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return Errorf("failed to create request: %w", err)
 	}
@@ -555,6 +682,7 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 	lines := 0
 	var errs error
+	modeP1 := false
 	// stream
 	for {
 
@@ -567,9 +695,7 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 		if isEOF && len(line) == 0 {
 			break
 		}
-
 		lines++
-		//slog.Info("got line", "line", json.RawMessage(line), "err", err)
 		if err != nil {
 			return fmt.Errorf("error reading stream: %w", err)
 		}
@@ -577,12 +703,58 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 		if len(trimmedLine) == 0 {
 			continue
 		}
+		if post, ok := bytes.CutPrefix(trimmedLine, []byte("data: ")); ok {
+			trimmedLine = post
+			modeP1 = true
+		}
 
 		var chunk ChatResponse
-		if err := json.Unmarshal(trimmedLine, &chunk); err != nil {
-			slog.Error("decode cr", "err", err)
-			errs = errors.Join(errs, Errorf("%w", err))
+		_ = modeP1 // TODO: use
+		if bytes.HasPrefix(trimmedLine, []byte("[DONE]")) {
 			continue
+		} else {
+			if err := json.Unmarshal(trimmedLine, &chunk); err != nil {
+				slog.Error("decode cr", "err", err, "chunk", string(trimmedLine))
+				errs = errors.Join(errs, Errorf("%w", err))
+				continue
+			}
+			if chunk.DoneReason2 != "" {
+				chunk.Done = true
+				chunk.DoneReason = chunk.DoneReason2
+				chunk.DoneReason2 = ""
+			}
+			if chunk.Message.Reasoning2 != "" {
+				chunk.Message.Reasoning = chunk.Message.Reasoning2
+				chunk.Message.Reasoning2 = ""
+			}
+			for i := range chunk.Choices {
+				choice := &chunk.Choices[i]
+				if chunk.DoneReason2 != "" {
+					chunk.Done = true
+					chunk.DoneReason = chunk.DoneReason2
+					chunk.DoneReason2 = ""
+				}
+				//	slog.Info("handling delta", "d", chunk.Choices[i].Delta)
+				choice.Delta.Reasoning = chunk.Choices[i].Delta.Reasoning2
+
+				choice.Delta.Reasoning2 = ""
+				if ptr := choice.FinishReason; ptr != nil {
+					chunk.Done = true
+					chunk.DoneReason = *ptr
+				}
+				chunk.Message = chunk.Message.Add(choice.Delta)
+				//	slog.Info("added delta", "c", chunk.Choices[i].Delta)
+				if !chunk.Done && chunk.Message.IsEmpty() {
+					slog.Info("handling delta", "d", chunk.Choices[i].Delta, "line", string(trimmedLine), "chunk", chunk)
+					return fmt.Errorf("could not ")
+				}
+			}
+			chunk.Choices = nil
+		}
+		if !chunk.Done && chunk.Message.IsEmpty() {
+			slog.Warn("empty", "from", string(trimmedLine))
+		} else if chunk.Message.Role == "" {
+			chunk.Message.Role = "assistant"
 		}
 		for i, handler := range handlers {
 			if err := handler(chunk); err != nil {
@@ -625,7 +797,7 @@ func (e E) Chat(ctx context.Context, messages ChatMessages, think any) (ChatMess
 // Uses [E.Stream], writes stream text to [[E.Writer]] if non-nil, returns full [ChatResponse]
 func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse, error) {
 	if e := e.ValidateConfig(think); e != nil {
-		return ChatResponse{}, Errorf("%w", e)
+		return ChatResponse{}, Errorf("validate: %w", e)
 	}
 	//slog := Slog()
 	var chatResp ChatResponse

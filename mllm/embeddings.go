@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
-	"strings"
 
 	"github.com/aerth/mostly/vector256"
 )
@@ -17,40 +17,53 @@ import (
 //
 // Apart from Path, all serve as fallback if not present in request/env.
 var EmbedOptions = struct {
-	Model   string // if req.Model is empty and env is empty
-	EnvHost string // the ENV_VAR to check to override [E.Host] (for when using 2 different hosts for llm,embeddings.)
-	Path    string // custom endpoint url path (default /api/embed)
+	URL        url.URL
+	Model      string // if req.Model is empty and env is empty
+	Dimensions int
+	EnvHost    string // the ENV_VAR to check to override [E.Host] (for when using 2 different hosts for llm,embeddings.)
+	Path       string // custom endpoint url path (default /api/embed)
 }{
 	Model:   "nomic-embed-text:v1.5",
 	EnvHost: "LLM_EMBED_HOST",
-	Path:    "/api/embed",
+	Path:    "/v1/embeddings", // Path is to use same as [E.Host] but different path. NOT used if URL is set
 }
+
+var envembedhost = struct {
+	Checked bool
+	Value   url.URL
+}{}
 
 // Embed generates new embeddings
 //
 // See [NewNomicDocument] and [NewNomicQuery] for model-specific query prefixes
 func (e E) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) {
+	if !envembedhost.Checked {
+		if embeddingHost := os.Getenv(EmbedOptions.EnvHost); embeddingHost != "" {
+			u, err := url.Parse(embeddingHost)
+			if err != nil {
+				return nil, err
+			}
+			EmbedOptions.URL = *u
+		}
+	}
+
 	if req.Model == "" {
 		req.Model = EmbedOptions.Model
 	}
-	if req.Host == "" {
-		endpoint := e.Host.String()
-		if embeddingHost := os.Getenv(EmbedOptions.EnvHost); embeddingHost != "" {
-			endpoint = embeddingHost
-		}
-		req.Host = endpoint
+	endpoint := e.Host
+	if EmbedOptions.URL.Host != "" {
+		endpoint = EmbedOptions.URL
+	} else if EmbedOptions.Path != "" {
+		endpoint.Path = EmbedOptions.Path
 	}
-	req.Host = strings.TrimSuffix(req.Host, "/")
-	if req.Host == "" {
-		req.Host = "http://localhost:11434"
-	}
+	req.Host = endpoint
 
 	b, err := json.Marshal(req)
 	if err != nil {
 		return nil, Errorf("%w", err)
 	}
 	body := bytes.NewReader(b)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, req.Host+EmbedOptions.Path, body)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, req.Host.String(), body)
 	if err != nil {
 		return nil, Errorf("%w", err)
 	}
@@ -69,6 +82,9 @@ func (e E) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) 
 	err = json.Unmarshal(buf, resp)
 	if err != nil {
 		return nil, ErrorWithResponse{error: Errorf("%w", err), body: buf}
+	}
+	if len(resp.Data) != 0 && len(resp.Embeddings) == 0 {
+		resp.Embeddings = []vector256.Vector256{resp.Data[0].Embedding}
 	}
 	if len(resp.Embeddings) == 0 {
 		return resp, ErrorWithResponse{error: fmt.Errorf("none"), body: buf}
@@ -92,9 +108,9 @@ func (e ErrorWithResponse) Unwrap() error {
 
 // EmbedRequest is the request passed to [E.Embed].
 type EmbedRequest struct {
-	Model     string   `json:"model"`
-	Input     []string `json:"input"`
-	KeepAlive int      `json:"keep_alive,omitempty"`
+	Model     string `json:"model"`
+	Input     string `json:"input"`
+	KeepAlive int    `json:"keep_alive,omitempty"`
 	// Dimensions truncates the output embedding to the specified dimension.
 	Dimensions int   `json:"dimensions,omitempty"`
 	Truncate   *bool `json:"truncate,omitempty"`
@@ -103,17 +119,23 @@ type EmbedRequest struct {
 
 	// not sent
 
-	Host string `json:"-"` // optional: override E.Host and LLM_EMBED_HOST env
+	Host url.URL `json:"-"` // optional: override E.Host and LLM_EMBED_HOST env
 }
 
 // EmbedResponse is the response from [Client.Embed].
 type EmbedResponse struct {
 	Model      string                `json:"model"`
 	Embeddings []vector256.Vector256 `json:"embeddings"` // get resp.Embeddings[0]
-	Stats                            // limited for this endpoint
+	Data       []*struct {
+		Embedding vector256.Vector256
+	} `json:"data,omitempty"`
+	Stats // limited for this endpoint
 }
 
 func (e *EmbedResponse) GetEmbeddings() vector256.Vector256 {
+	if e != nil && len(e.Data) != 0 {
+		return e.Data[0].Embedding
+	}
 	if e == nil || len(e.Embeddings) == 0 {
 		return nil
 	}
@@ -126,10 +148,11 @@ var DefaultEmbedOptions map[string]any // nil
 func NewEmbed(s string) EmbedRequest {
 	reqBody := EmbedRequest{
 		Model:      "",
-		Input:      []string{s},
+		Input:      s,
 		Options:    DefaultEmbedOptions,
 		Truncate:   new(true),
 		Dimensions: vector256.VarLen,
+		KeepAlive:  -1,
 	}
 	return reqBody
 }

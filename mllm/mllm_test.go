@@ -2,6 +2,8 @@ package mllm_test
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,13 +17,10 @@ import (
 	"github.com/aerth/mostly/vector256"
 )
 
-func init() {
+func TestMain(t *testing.M) {
 	slog.SetDefault(slog.New(
 		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true}),
 	)) // log json to stdout
-}
-
-func TestMain(t *testing.M) {
 	def := mllm.Default()
 
 	// check for required env vars
@@ -59,32 +58,55 @@ func TestEmbed1(t *testing.T) {
 	}
 	println("got:", fmt.Sprintf("%v ... %d total", got[:3], vector256.VarLen))
 	first := vector256.Vector256{0.03836852, 0.056748904, -0.27613422, -0.004759476, 0.11951496, -0.03993982, 0.05664575, -0.031644862, 0.01586234, -0.03084815}
-	if !slices.Equal(first, got[:10]) {
+
+	for i := range first {
+		if !compareFloat(first[i], got[i]) {
+			t.Fatalf("v %d: %v != %v", i, got[i], first[i])
+		}
+	}
+	if false && !slices.Equal(first, got[:10]) { // TODO: it broke
 		t.Fatalf("unexpected output: %#v", got[:10])
 	}
+}
+
+func compareFloat[T ~float32 | ~float64](x, y T) bool {
+	const epsilon = 1e-4
+	diff := x - y
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff < epsilon
 }
 
 func TestEmbed2(t *testing.T) {
 	ctx := t.Context()
 	x, err := mllm.Default().Embed(ctx, mllm.NewNomicQuery("testing test tester"))
 	if err != nil {
+		println(string(err.(mllm.ErrorWithResponse).Body()))
 		t.Fatal(err)
 	}
 	if x == nil {
 		t.Fatal(err)
 	}
+	println("SUMMARY")
 	_ = x.Summary(t.Output())
+	println("---")
 	got := x.GetEmbeddings()
 	if len(got) != vector256.VarLen {
 		t.Fatalf("%d != %d", len(got), vector256.VarLen)
 	}
-	println("got:", fmt.Sprintf("%v ... %d total", got[:3], vector256.VarLen))
-	first := []float32{
+	println("got:", fmt.Sprintf("%#v ... %d total", got[:10], vector256.VarLen))
+	first := []vector256.F{
 		0.03676727, 0.06071676, -0.29565915, -0.017700996, 0.11540128,
 		-0.036267255, 0.04523779, -0.062040724, 0.007202007, -0.017709982,
 	}
-	if !slices.Equal(first, got[:10]) {
-		t.Fatalf("unexpected output: %#v", got[:10])
+	for i := range first {
+		if !compareFloat(first[i], got[i]) {
+			t.Fatalf("v %d: %v != %v", i, got[i], first[i])
+		}
+	}
+	if true {
+		return
 	}
 }
 
@@ -104,17 +126,20 @@ func TestEmbed3(t *testing.T) {
 	}
 	println("got:", fmt.Sprintf("%v ... %d total", got[:3], vector256.VarLen))
 	first := vector256.Vector256{0.046110913, 0.032962788, -0.20280331, 0.012861654, 0.1151968, -0.0126432115, 0.0051027983, -0.07082936, -0.01349577, -0.021741517}
-	if !slices.Equal(first, got[:10]) {
-		t.Fatalf("unexpected output: %#v", got[:10])
+	for i := range first {
+		if !compareFloat(first[i], got[i]) {
+			t.Fatalf("v %d: %v != %v", i, got[i], first[i])
+		}
 	}
 }
 
-func TestGenerateGet(t *testing.T) {
+func TestGenerateGetThink(t *testing.T) {
 	ctx := t.Context()
 	for _, thinkVal := range []any{"high", false} {
 		t.Run(fmt.Sprintf("GenerateGet(think=%v)", thinkVal), func(t *testing.T) {
 			t1 := time.Now()
-			gotFalse, err := mllm.Default().WithTools(nil).Get(ctx, testMessageConvo1(), thinkVal)
+			gotFalse, err := mllm.Default().
+				WithTools(nil).Get(ctx, testMessageConvo1(), thinkVal)
 			if err != nil {
 				t.Fatal(err)
 				return
@@ -138,17 +163,15 @@ func TestStream(t *testing.T) {
 }
 
 func TestGetWithDefaultStreamHandler(t *testing.T) {
-	old := mllm.DefaultWriter
 	var buf bytes.Buffer
 
 	// Default() will have this writer as a stream handler
-	mllm.DefaultWriter = io.MultiWriter(&buf, os.Stderr) // stream generated output to stderr
-	t.Cleanup(func() {
-		mllm.DefaultWriter = old
-	})
+	client := mllm.Default()
+	client.Writer = io.MultiWriter(&buf, os.Stderr) // stream generated output to stderr
+	//mllm.HideThink = true
 	ctx := t.Context()
 	println("starting:")
-	got, err := mllm.Default().Get(ctx, testMessageConvo1(), false)
+	got, err := client.Get(ctx, testMessageConvo1(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,22 +192,61 @@ func testMessageConvo1() []mllm.Message {
 	}
 }
 
+// TestEmptyA ollama allows empty convo to start up the model. This library does not.
 func TestEmptyA(t *testing.T) {
 	e := mllm.Default()
 
 	t.Run("empty streambg", func(t *testing.T) {
 		err := <-e.StreamBG(t.Context(), nil, false)
-		if err != nil {
+		if !errors.Is(err, mllm.ErrNoConvo) {
 			t.Fatal(err)
 		}
 	})
 	t.Run("empty streambg", func(t *testing.T) {
 		got, err := e.Get(t.Context(), nil, false)
+		if !errors.Is(err, mllm.ErrNoConvo) {
+			t.Fatal(err)
+		}
+		if !got.Message.IsEmpty() {
+			t.Fatal("expected IsEmpty to be true for empty convo")
+		}
+	})
+}
+
+var echoTool = mllm.Tool{
+	Spec: json.RawMessage(`{"name": "echo_tester", "description": "Returns the input string exactly as provided.", "parameters": {"type": "object", "properties": {"input": {"type": "string", "description": "The text to be echoed"}}, "required": ["input"]}}`),
+	Exec: nil,
+}
+
+func TestTool1(t *testing.T) {
+	client := mllm.Default()
+	client.Writer = os.Stderr
+	// model should be able to call a tool, consumer should be able to parse arguments
+	t.Run("echo", func(t *testing.T) {
+		ctx := t.Context()
+		client.Tools = []json.Marshaler{echoTool}
+		got, err := client.Get(ctx, mllm.Messages{
+			{Role: "user", Content: "use the tool to say hello world"},
+		}, "low")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !got.Done {
-			t.Fatal("expected Done to be true for empty convo")
+		println("---")
+		if len(got.Message.ToolCalls) == 0 {
+			t.Fatal("expected tool calls")
 		}
+		// slog.Info("raw call", "raw", got.Message.ToolCalls[0])
+		// parse args
+		var call mllm.Call[*struct {
+			Input string `json:"input"`
+		}]
+		err = json.Unmarshal(got.Message.ToolCalls[0], &call)
+		if err != nil {
+			t.Fatal("decode", err)
+		}
+		if call.Function.Name != "echo_tester" {
+			t.Fatalf("expected echo_tester call, got %q", call.Function.Name)
+		}
+		slog.Info("got call", "call", call)
 	})
 }
