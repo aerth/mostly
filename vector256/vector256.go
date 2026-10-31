@@ -10,7 +10,12 @@ import (
 )
 
 // Vector256 represents a 256-dimensional float32 vector for pgvector and may be zero-length or a slice of 256 float32
-type Vector256 []float32
+type (
+	Vector256 []F
+	F         = float32 // F is for use instead of float32(x) or float64(x)
+)
+
+var BitSize = 32
 
 // SearchEmbeddings helper embedded type (for 256 specific)
 type SearchEmbeddings struct {
@@ -64,13 +69,13 @@ func (v *Vector256) Scan(value any) error {
 		return fmt.Errorf("invalid database vector dimension: got %d, expected %d", len(tokens), VarLen)
 	}
 
-	res := make([]float32, len(tokens))
+	res := make(Vector256, len(tokens))
 	for i, t := range tokens {
-		val, err := strconv.ParseFloat(strings.TrimSpace(t), 32)
+		val, err := strconv.ParseFloat(strings.TrimSpace(t), BitSize)
 		if err != nil {
 			return fmt.Errorf("failed to parse vector element at index %d: %w", i, err)
 		}
-		res[i] = float32(val)
+		res[i] = F(val)
 	}
 
 	*v = res

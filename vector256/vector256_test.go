@@ -35,7 +35,7 @@ func TestVector256(t *testing.T) {
 	t.Run("embedding encode to json", func(t *testing.T) {
 		v.Embeddings = make(vector256.Vector256, vector256.VarLen)
 		for i := range v.Embeddings {
-			v.Embeddings[i] = float32(i)
+			v.Embeddings[i] = vector256.F(i)
 		}
 		js, err = json.Marshal(v.Embeddings)
 		if err != nil {
