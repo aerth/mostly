@@ -75,3 +75,7 @@ func (x) Dummy(cr mllm.ChatResponse) error {
 }
 
 ```
+
+## ChatMessage
+
+ChatMessage is an example multi-participant chat message. Most users of this package will use a plain Message instead, creating their own wrapper for persistence if needed. ChatMessage, unlike other parts of this package, is subject to change for now.
