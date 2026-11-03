@@ -15,7 +15,6 @@ import (
 	"os"
 	"slices"
 	"time"
-	"uuid"
 
 	"github.com/aerth/mostly/stackerr"
 )
@@ -24,6 +23,8 @@ import (
 //
 // Writer for streaming output with ThinkPre and ThinkPost.
 type E struct {
+	// minimally
+
 	Host  url.URL // the LLM API (required)
 	Model string  // the model name (required)
 
@@ -32,15 +33,44 @@ type E struct {
 	Client  *http.Client      `json:"-"` // custom http client (optional)
 	Headers map[string]string `json:"-"` // custom headers (optional)
 	Tools   []json.Marshaler  // Bring your own tools (optional)
-	Options *Options          // e options (optional)
+	Options *Options          // Options (optional) added to each NewRequest
 
-	// Writer if non-nil will be automatically added as a stream handler to [[E.Get]] and [[E.Stream]]
-	Writer    io.Writer `json:"-"`
-	ThinkPre  string    // optional, default used in [NewEndpoint]
-	ThinkPost string    // optional, default used in [NewEndpoint]
+	Writer       io.Writer // used in [E.Get] as StreamWriter if no StreamWriter
+	StreamWriter W         `json:"-" gorm:"-"` // used as only handler **IF no handlers given**
 
-	// Handlers added to all requests
+	PreRequest func(request *ChatRequest) error `json:"-"`
+
+	// Handlers **added** to all requests
 	Handlers []StreamHandler `json:"-"`
+}
+
+func ToMarshalers(v ...json.Marshaler) []json.Marshaler {
+	return v
+}
+
+func _() {
+	println("OK")
+	ToMarshalers(json.RawMessage(""))
+}
+
+type (
+	W  interface{ New() StreamHandler }
+	W1 struct {
+		// Writer if non-nil will be automatically added as a stream handler to [[E.Get]] and [[E.Stream]]
+		Writer    io.Writer `json:"-"`
+		ThinkPre  string    // optional, default used in [NewEndpoint]
+		ThinkPost string    // optional, default used in [NewEndpoint]
+	}
+)
+
+var _ W = W1{}
+
+func Noop(cr ChatResponse) error { return nil }
+func (w W1) New() StreamHandler {
+	if w.Writer == nil || w.Writer == io.Discard {
+		return Noop
+	}
+	return NewHandlerOut(w.Writer, w.ThinkPre, w.ThinkPost)
 }
 
 type (
@@ -55,19 +85,20 @@ func (c StreamHandler) HandleChat(cr ChatResponse) error {
 }
 
 var (
-	DefaultThinkPre  = "Thinking:\n"
-	DefaultThinkPost = "\n... done thinking.\n"
-)
-
-var (
-	EnvModel = []string{"MLLM_MODEL", "OLLAMA_MODEL", "LLM_MODEL"}
-	EnvHost  = []string{"MLLM_HOST", "OLLAMA_HOST", "LLM_HOST"}
-	EnvKey   = []string{"MLLM_API_KEY", "OLLAMA_API_KEY", "LLM_API_KEY"}
-)
-
-var (
+	DefaultThinkPre         = "Thinking:\n"
+	DefaultThinkPost        = "\n... done thinking.\n"
+	ThinkRequestType        = false
 	StopAtFirstHandlerError = true
 	ErrNoLines              = errors.New("no lines read")
+	HideThink               = false
+	HideTools               = false
+	EnvModel                = []string{"MLLM_MODEL", "OLLAMA_MODEL", "LLM_MODEL"}
+	EnvHost                 = []string{"MLLM_HOST", "OLLAMA_HOST", "LLM_HOST"}
+	EnvKey                  = []string{"MLLM_API_KEY", "OLLAMA_API_KEY", "LLM_API_KEY"}
+	DebugLLM2               = os.Getenv("DEBUG_LLM") == "2"
+	DebugLLM                = os.Getenv("DEBUG_LLM") == "1" || DebugLLM2
+	ErrNoConvo              = errors.New("no messages in conversation")
+	Quiet                   = false // quiet the debug
 )
 
 func firstEnv(k []string) string {
@@ -82,13 +113,17 @@ func firstEnv(k []string) string {
 
 var ForcePath = false
 
+var ToolWriter = toolWriter
+
 // NewEndpoint reads env and returns a new reusable Endpoint
 //
 // See [E.StreamBG] or [E.Stream] or [E.Get]
 func NewEndpoint(options *Options, tools []json.Marshaler) E {
+	if DebugLLM2 && (options == nil) {
+		options = &Options{Debug: true}
+	}
 	model := firstEnv(EnvModel)
 	host := firstEnv(EnvHost)
-	k := firstEnv(EnvKey)
 	var hostURL url.URL
 	if host != "" {
 		u, _ := url.Parse(host)
@@ -102,12 +137,21 @@ func NewEndpoint(options *Options, tools []json.Marshaler) E {
 		}
 	}
 	var hdr map[string]string
+	k := firstEnv(EnvKey)
 	if k != "" {
 		hdr = map[string]string{
 			"Authorization": "Bearer " + k,
 		}
 	}
-	return E{Host: hostURL, Model: model, Client: http.DefaultClient, Options: options, Tools: tools, Writer: DefaultWriter, ThinkPre: DefaultThinkPre, ThinkPost: DefaultThinkPost, Headers: hdr, Handlers: nil}
+	var w1 W
+	if DefaultWriter != nil {
+		w1 = W1{Writer: DefaultWriter, ThinkPre: DefaultThinkPre, ThinkPost: DefaultThinkPost}
+	}
+	return E{
+		Host: hostURL, Model: model, Client: http.DefaultClient, Options: options, Tools: tools,
+		StreamWriter: w1,
+		Headers:      hdr, Handlers: nil,
+	}
 }
 
 // DefaultWriter added to all new endpoints
@@ -115,7 +159,7 @@ var DefaultWriter io.Writer = nil
 
 // Default creates a new reusable LLM endpoint from env using [NewEndpoint] with no tools no options.
 var Default = func() E {
-	e := NewE(nil, nil)
+	e := NewEndpoint(nil, nil)
 	return e
 }
 
@@ -162,8 +206,6 @@ type Think struct {
 }
 type Value = any
 
-var ThinkRequestType = false
-
 // MarshalJSON implements [json.Marshaler] for sending request
 func (t Think) MarshalJSON() ([]byte, error) {
 	tv := t.Value
@@ -185,7 +227,7 @@ func (t Think) MarshalJSON() ([]byte, error) {
 	}
 }
 
-// ChatRequest sent to LLM
+// ChatRequest sent to LLM (/v1/chat/completions or compatible)
 type ChatRequest struct {
 	Model     string           `json:"model,omitempty"`
 	Messages  []Message        `json:"messages,omitempty"`
@@ -254,12 +296,14 @@ type Message struct {
 	Role       string            `json:"role,omitempty"`
 	Content    string            `json:"content,omitempty"`
 	Reasoning  string            `json:"thinking,omitempty" gorm:"default:null"`
-	Reasoning2 string            `json:"reasoning,omitempty" gorm:"-"` // Internal, DO NOT USE
-	Reasoning3 string            `json:"reasoning_content,omitempty" gorm:"-"`
 	ToolCalls  []json.RawMessage `json:"tool_calls,omitempty" gorm:"type:jsonb;serializer:json;default:null;"`
 	ToolName   string            `json:"tool_name,omitempty" gorm:"default:null"`
 	ToolCallID string            `json:"tool_call_id,omitempty" gorm:"default:null"`
 	Images     [][]byte          `json:"images,omitempty" gorm:"serializer:json;type:jsonb;default:null;"`
+
+	//
+	Reasoning2 string `json:"reasoning,omitempty" gorm:"-"`         // Internal, DO NOT USE
+	Reasoning3 string `json:"reasoning_content,omitempty" gorm:"-"` // Internal, DO NOT USE
 }
 type Messages []Message
 
@@ -293,105 +337,6 @@ func (m Messages) TopRole(role string) Message {
 		}
 	}
 	return Message{}
-}
-
-func (cm ChatMessages) Top() ChatMessage {
-	l := len(cm)
-	if l == 0 {
-		return ChatMessage{}
-	}
-	return cm[l-1]
-}
-
-func (cm ChatMessages) TopN(n int) ChatMessages {
-	l := len(cm)
-	if l == 0 {
-		return nil
-	}
-	if l <= n {
-		return cm
-	}
-	return cm[l-n:]
-}
-
-func (cm ChatMessages) TopRole(role string) ChatMessage {
-	l := len(cm)
-	if l == 0 {
-		return ChatMessage{}
-	}
-	l -= 1
-	for i := range cm {
-		if cm[l-i].Role == role {
-			return cm[i]
-		}
-	}
-	return ChatMessage{}
-}
-
-// ChatMessage is a [Message] but with additional metadata (for a multi-participant conversation)
-type ChatMessage struct {
-	MessageID uuid.UUID `gorm:"type:uuid;primaryKey;default:null;" json:"message_id,omitempty"` // MessageID is unique identifier for each message
-	Message
-	From      string    `json:"from,omitempty" gorm:"default:null"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// ChatMessages like [Messages] but with additional metadata (for a multi-participant conversation)
-type ChatMessages []ChatMessage
-
-func (cm ChatMessages) ToMessages() Messages {
-	a := make(Messages, len(cm))
-	for i := range cm {
-		a[i] = cm[i].Message
-	}
-	return a
-}
-
-// ChatMessageFormatter may skip a message by returning false
-//
-// The returned formatted messages are NEVER stored only sent
-type ChatMessageFormatter = func(cm ChatMessage) ([]Message, bool)
-
-// ToMessagesFormat returns a **temporary** convo for llm to produce a single new [Message]
-// The returned convo should NEVER be stored (only sent to llm) as the Content is modified by formatter.
-func (cm ChatMessages) ToMessagesFormat(fn ChatMessageFormatter) []Message {
-	if fn == nil {
-		fn = DefaultChatMessageFormatter
-	}
-	var a []Message
-	for i := range cm {
-		m, ok := fn(cm[i])
-		if ok {
-			a = append(a, m...)
-		}
-	}
-	return a
-}
-
-// DefaultChatMessageFormatter pass through [ChatMessageFormatter]
-// In a custom implementation, this might add text to Content, replace Role, or insert messages before/after.
-var DefaultChatMessageFormatter = func(cm ChatMessage) ([]Message, bool) {
-	return []Message{cm.Message}, true
-}
-var _ ChatMessageFormatter = DefaultChatMessageFormatter
-
-// NewChatMessage from (see also [Message.ToChatMessage])
-func NewChatMessage(from string, role string, text string) ChatMessage {
-	m := Message{Role: role, Content: text}
-	return m.ToChatMessage(from)
-}
-
-// ToChatMessage with new UUID,from,timestamp. should be called immediately after stream is finished..
-//
-// [ChatMessage] MAY be stored (NOT plain [Message])
-func (m Message) ToChatMessage(from string) ChatMessage {
-	m2 := ChatMessage{
-		MessageID: uuid.New(),
-		Message:   m,
-		From:      from,
-		CreatedAt: time.Now().Truncate(time.Millisecond),
-	}
-	return m2
 }
 
 // Add fields of c2 to c for gathering streamed chunks
@@ -446,12 +391,6 @@ func StdoutHandler(cr ChatResponse) error {
 	return NewHandlerOut(os.Stdout, DefaultThinkPre, DefaultThinkPost).HandleChat(cr)
 }
 
-var (
-	HideThink = false
-	HideTools = false
-	DebugLLM  = os.Getenv("DEBUG_LLM") == "1"
-)
-
 // NewHandlerOut plain 🍔
 func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler {
 	if w == nil {
@@ -500,13 +439,17 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 				_, _ = fmt.Fprint(w, "\n")
 			}
 			fflush(w)
+
+			// be kind rewind
+			calls = nil
+			reasoning = false
+			hidethink = HideThink
+			hidetools = HideTools
 		}
 
 		return nil
 	}
 }
-
-var ToolWriter = toolWriter
 
 func toolWriter(w io.Writer, rawMessage json.RawMessage) (err error) {
 	return json.NewEncoder(w).Encode(map[string]any{"tool_call": rawMessage})
@@ -560,8 +503,6 @@ func (e E) NewRequest(messages []Message, think any) *ChatRequest {
 	return &reqBody
 }
 
-var ErrNoConvo = errors.New("no messages in conversation")
-
 // Stream with handlers(only) or to [E.Writer], calls [E.Do]
 func (e E) Stream(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) error {
 	if len(messages) == 0 {
@@ -570,16 +511,25 @@ func (e E) Stream(ctx context.Context, messages []Message, think any, handlers .
 	if e := e.ValidateConfig(think); e != nil {
 		return e
 	}
-	if len(handlers) == 0 && e.Writer != nil {
-		handlers = []StreamHandler{NewHandlerOut(e.Writer, e.ThinkPre, e.ThinkPost)}
+	if len(handlers) == 0 && e.StreamWriter != nil {
+		handlers = []StreamHandler{e.StreamWriter.New()}
 	}
-	if len(handlers) == 0 && len(messages) != 0 { // allow no handlers for a ping
+	if len(handlers) == 0 && e.Writer != nil {
+		handlers = []StreamHandler{W1{Writer: e.Writer, ThinkPre: DefaultThinkPre, ThinkPost: DefaultThinkPost}.New()}
+	}
+	if len(handlers) == 0 {
 		return Errorf("no stream handlers were given")
 	}
-	// t1 := time.Now()
-
-	creq := *e.NewRequest(messages, think)
-	return e.Do(ctx, creq, handlers)
+	creq := e.NewRequest(messages, think)
+	if creq == nil {
+		return Errorf("could not create request")
+	}
+	if e.PreRequest != nil {
+		if err := e.PreRequest(creq); err != nil {
+			return err
+		}
+	}
+	return e.Do(ctx, *creq, handlers)
 }
 
 // Do sends a [ChatRequest] and streams response in [E.Read]
@@ -588,7 +538,7 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 	if err != nil {
 		return Errorf("failed to marshal request: %w", err)
 	}
-	if e.Options != nil && e.Options.Debug {
+	if creq.Options != nil && creq.Options.Debug { //nolint
 		Slog().Info("sending body", "js", json.RawMessage(bodyBytes))
 	}
 
@@ -629,8 +579,6 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 	}
 	return nil
 }
-
-var Quiet = false // quiet the debug
 
 func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 	lines := 0
@@ -739,10 +687,10 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 func (e E) ValidateConfig(think any) error {
 	var errs error
 	if e.Model == "" {
-		errs = errors.Join(errs, fmt.Errorf("missing MODEL"))
+		errs = errors.Join(errs, fmt.Errorf("missing LLM_MODEL"))
 	}
 	if e.Host.Scheme == "" || e.Host.Host == "" {
-		errs = errors.Join(errs, fmt.Errorf("missing HOST"))
+		errs = errors.Join(errs, fmt.Errorf("missing LLM_HOST"))
 	}
 	_, thinkB := think.(bool)
 	_, thinkS := think.(string)
@@ -772,10 +720,13 @@ func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse
 	//slog := Slog()
 	var chatResp ChatResponse
 	var handlers []StreamHandler
-	if e.Writer != nil {
-		handlers = []StreamHandler{NewHandlerOut(e.Writer, e.ThinkPre, e.ThinkPost), chatResp.Handler}
+	if e.StreamWriter != nil {
+		println("streamwriter")
+		handlers = []StreamHandler{e.StreamWriter.New(), chatResp.Handler}
+	} else if e.Writer != nil {
+		handlers = []StreamHandler{W1{e.Writer, DefaultThinkPre, DefaultThinkPost}.New(), chatResp.Handler}
 	} else {
-		handlers = []StreamHandler{chatResp.Handler}
+		handlers = []StreamHandler{chatResp.Handler} // no printing
 	}
 	if len(e.Handlers) != 0 {
 		handlers = append(handlers, e.Handlers...)

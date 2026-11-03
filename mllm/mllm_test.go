@@ -66,7 +66,7 @@ func TestStream(t *testing.T) {
 	e.Writer = os.Stderr
 	err := e.Stream(ctx, testMessageConvo1(), false)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("plain stream failed", err)
 	}
 }
 
