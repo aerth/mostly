@@ -72,18 +72,9 @@ func (c *Call[T]) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
-	var args T
-	if x.Function.Arguments[0] != '"' {
-		type plain2 Call[T]
-		var x2 plain2
-		err := json.Unmarshal(b, &x2)
-		if err != nil {
-			return err
-		}
-		*c = Call[T](x2)
-		return nil
-	}
-	{
+	// case: "arguments": "{\"foo\": \"bar\"}"
+	if len(x.Function.Arguments) > 2 && x.Function.Arguments[0] == '"' && x.Function.Arguments[1] == '{' {
+		// unquote
 		var z string
 		err = json.Unmarshal(x.Function.Arguments, &z)
 		if err != nil {
@@ -91,16 +82,22 @@ func (c *Call[T]) UnmarshalJSON(b []byte) error {
 		}
 		x.Function.Arguments = json.RawMessage(z)
 	}
-	err = json.Unmarshal(x.Function.Arguments, &args)
-	if err != nil {
-		return err
-	}
 	*c = Call[T]{
 		ID:    x.ID,
 		Index: x.Index,
 		Type:  x.Type,
 	}
 	c.Function.Name = x.Function.Name
+
+	// decode args
+	// case: "arguments": {"foo": "bar"}
+	var args T
+	if len(x.Function.Arguments) != 0 {
+		err = json.Unmarshal(x.Function.Arguments, &args)
+		if err != nil {
+			return err
+		}
+	}
 	c.Function.Arguments = args
 	return nil
 }
@@ -651,7 +648,7 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 		return Errorf("failed to marshal request: %w", err)
 	}
 	if e.Options != nil && e.Options.Debug {
-		slog.Info("sending body", "js", json.RawMessage(bodyBytes))
+		Slog().Info("sending body", "js", json.RawMessage(bodyBytes))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", e.Host.String(), bytes.NewBuffer(bodyBytes))
@@ -676,14 +673,23 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 		return Errorf("unexpected status code: %d %s", resp.StatusCode, string(b))
 	}
 
-	reader := bufio.NewReader(resp.Body)
+	var copybuf bytes.Buffer
+	reader := bufio.NewReader(io.TeeReader(resp.Body, &copybuf))
 
 	err = e.Read(reader, handlers...)
 	if err != nil {
+		if !Quiet {
+			if e.Options == nil || !e.Options.Debug {
+				Slog().Info("sent request body", "js", json.RawMessage(bodyBytes))
+			}
+			Slog().Info("full response body", "js", copybuf.String())
+		}
 		return Errorf("%w", err)
 	}
 	return nil
 }
+
+var Quiet = false // quiet the debug
 
 func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 	lines := 0
@@ -723,7 +729,7 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 			continue
 		} else {
 			if err := json.Unmarshal(trimmedLine, &chunk); err != nil {
-				slog.Error("decode cr", "err", err, "chunk", string(trimmedLine))
+				Slog().Error("decode cr", "err", err, "chunk", string(trimmedLine))
 				errs = errors.Join(errs, Errorf("%w", err))
 				continue
 			}
@@ -747,7 +753,7 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 					chunk.DoneReason = chunk.DoneReason2
 					chunk.DoneReason2 = ""
 				}
-				//	slog.Info("handling delta", "d", chunk.Choices[i].Delta)
+				//	Slog().Info("handling delta", "d", chunk.Choices[i].Delta)
 
 				if choice.Delta.Reasoning3 != "" {
 					choice.Delta.Reasoning = choice.Delta.Reasoning3
@@ -761,16 +767,16 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 					chunk.DoneReason = *ptr
 				}
 				chunk.Message = chunk.Message.Add(choice.Delta)
-				//	slog.Info("added delta", "c", chunk.Choices[i].Delta)
+				//	Slog().Info("added delta", "c", chunk.Choices[i].Delta)
 				if !chunk.Done && chunk.Message.IsEmpty() {
-					//slog.Info("handling delta", "d", chunk.Choices[i].Delta, "line", string(trimmedLine), "chunk", chunk)
+					//Slog().Info("handling delta", "d", chunk.Choices[i].Delta, "line", string(trimmedLine), "chunk", chunk)
 					continue
 				}
 			}
 			chunk.Choices = nil
 		}
 		if !chunk.Done && chunk.Message.IsEmpty() {
-			slog.Warn("empty", "from", string(trimmedLine))
+			Slog().Warn("possible decode issue", "from", string(trimmedLine))
 		} else if chunk.Message.Role == "" {
 			chunk.Message.Role = "assistant"
 		}
