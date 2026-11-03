@@ -2,19 +2,23 @@
 
 ## stackerr
 
-Use `Errorf("%w", err)` everywhere, and then log.Printf("%+v", err) for helpful error stack trace
+Use `stackerr.Errorf("%w", err)` everywhere, and then `log.Printf("%+v", err)` for helpful error stack trace.
+
+When using `slog` package, the trace is simplified to a single-line.
 
 ## superchan
 
-Cancellable Channel Context
+Cancellable Channel Context [superchan](./superchan/)
 
 ## ncode
 
-encoding, twist arrays (`[]string -> []MyString -> []string`)
+[encoding](./ncode/), twist arrays (`[]string -> []MyString -> []string`)
 
 ## anydb 
 
 store/fetch bbolt.DB helpers for nested buckets (path as `[][]byte` or `[]string`)
+
+*(anydb was removed to keep go.mod empty)*
 
 ## httpserver
 
