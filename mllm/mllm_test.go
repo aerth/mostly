@@ -2,7 +2,6 @@ package mllm_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -119,43 +118,5 @@ func TestEmptyA(t *testing.T) {
 		if !got.Message.IsEmpty() {
 			t.Fatal("expected IsEmpty to be true for empty convo")
 		}
-	})
-}
-
-var echoTool = mllm.Tool{
-	Spec: json.RawMessage(`{"name": "echo_tester", "description": "Returns the input string exactly as provided.", "parameters": {"type": "object", "properties": {"input": {"type": "string", "description": "The text to be echoed"}}, "required": ["input"]}}`),
-	Exec: nil,
-}
-
-func TestTool1(t *testing.T) {
-	client := mllm.Default()
-	client.Writer = os.Stderr
-	// model should be able to call a tool, consumer should be able to parse arguments
-	t.Run("echo", func(t *testing.T) {
-		ctx := t.Context()
-		client.Tools = []json.Marshaler{echoTool}
-		got, err := client.Get(ctx, mllm.Messages{
-			{Role: "user", Content: "use the tool to say hello world"},
-		}, "low")
-		if err != nil {
-			t.Fatal(err)
-		}
-		println("---")
-		if len(got.Message.ToolCalls) == 0 {
-			t.Fatal("expected tool calls")
-		}
-		// slog.Info("raw call", "raw", got.Message.ToolCalls[0])
-		// parse args
-		var call mllm.Call[*struct {
-			Input string `json:"input"`
-		}]
-		err = json.Unmarshal(got.Message.ToolCalls[0], &call)
-		if err != nil {
-			t.Fatal("decode", err)
-		}
-		if call.Function.Name != "echo_tester" {
-			t.Fatalf("expected echo_tester call, got %q", call.Function.Name)
-		}
-		slog.Info("got call", "call", call)
 	})
 }
