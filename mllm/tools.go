@@ -62,13 +62,101 @@ type RawToolCall = Call[json.RawMessage]
 // Call is for a tool-runner to decode arguments. Callers may use Call[struct{Path string}] to decode `"arguments": {"path": "foo.txt"}`
 //
 // It handles the case where Arguments json object is passed as a json string.
+//
+// See [Call.UnmarshalJSON]
 type Call[T any] struct {
-	ID       string `json:"id,omitempty"`
-	Index    int    `json:"index"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments T      `json:"arguments,omitempty"`
-	} `json:"function"`
+	ID       string      `json:"id,omitempty"`
+	Index    int         `json:"index"`
+	Type     string      `json:"type,omitempty"`
+	Function Function[T] `json:"function"`
+}
+type Function[T any] struct {
+	Name      string `json:"name"`
+	Arguments T      `json:"arguments,omitempty"`
+}
+
+func (c Call[T]) ToRaw() Call[json.RawMessage] {
+	js, err := json.Marshal(c.Function.Arguments)
+	if err != nil {
+		panic(err.Error())
+	}
+	return Call[json.RawMessage]{
+		Function: Function[json.RawMessage]{
+			Name:      c.Function.Name,
+			Arguments: js,
+		},
+		ID:    c.ID,
+		Index: c.Index,
+		Type:  c.Type,
+	}
+}
+
+func (c *Call[T]) FromRaw(js json.RawMessage) error {
+	if len(js) == 0 {
+		return nil
+	}
+	if js[0] != '{' {
+		println("FromRaw given stringified object")
+		var v string
+		if err := json.Unmarshal(js, &v); err != nil {
+			return fmt.Errorf("unwrap stage 1: %w", err)
+		}
+		js = json.RawMessage(v)
+	} else {
+		fmt.Printf("FromRaw is object direct %T: %s\n", c.Function.Arguments, string(js))
+	}
+	err := json.Unmarshal(js, &c)
+	if err != nil {
+		return fmt.Errorf("FromRaw unmarshal Call[%T]: %+v", c.Function.Arguments, err)
+	}
+	return nil
+}
+
+func (f Function[T]) ToJSON() json.RawMessage {
+	b, err := json.Marshal(f)
+	if err != nil {
+		panic(err.Error())
+	}
+	return b
+}
+
+func (f Function[T]) ArgsToMap() map[string]any {
+	b, err := json.Marshal(f.Arguments)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	m := map[string]any{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		panic(err.Error())
+	}
+	return m
+}
+
+func (f Function[T]) ArgsToJSON() json.RawMessage {
+	b, err := json.Marshal(f.Arguments)
+	if err != nil {
+		panic(err.Error())
+	}
+	return b
+}
+
+func (c *Call[T]) ToJSON() json.RawMessage {
+	b, err := json.Marshal(c)
+	if err != nil {
+		panic(err.Error())
+	}
+	return b
+}
+
+func (c *Call[T]) FromPlain(from Call[json.RawMessage]) error {
+	c.Function.Name = from.Function.Name
+	c.ID = from.ID
+	c.Index = from.Index
+	if err := json.Unmarshal(from.Function.Arguments, &c.Function.Arguments); err != nil {
+		return Errorf("FromPlain: %w", err)
+	}
+	return nil
 }
 
 func WrapToolSpec(js json.RawMessage) ([]byte, error) {
@@ -91,7 +179,7 @@ func (c *Call[T]) UnmarshalJSON(b []byte) error {
 	var rawcall Plain
 	err := json.Unmarshal(b, &rawcall)
 	if err != nil {
-		return fmt.Errorf("unmarshal call: %w", err)
+		return fmt.Errorf("unmarshal plain call: %w", err)
 	}
 	// case: "arguments": "{\"foo\": \"bar\"}"
 	if len(rawcall.Function.Arguments) > 2 && rawcall.Function.Arguments[0] == '"' && rawcall.Function.Arguments[1] == '{' {
@@ -100,6 +188,9 @@ func (c *Call[T]) UnmarshalJSON(b []byte) error {
 		err = json.Unmarshal(rawcall.Function.Arguments, &z)
 		if err != nil {
 			return err
+		}
+		if len(z) == 0 || z[0] != '{' {
+			return fmt.Errorf("unhandled arguments")
 		}
 		// now: "arguments": {"foo": "bar"}
 		rawcall.Function.Arguments = json.RawMessage(z)

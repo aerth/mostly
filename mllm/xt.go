@@ -26,7 +26,7 @@ type ChatMessage struct {
 }
 
 type ChatMessageWithID struct {
-	ID uint `json:"id,omitempty" gorm:"primaryKey"`
+	ID uint `json:"-" gorm:"primaryKey"` // TODO: cant json id here for [Message2.ToolCallID2] llama.cpp
 	ChatMessage
 }
 

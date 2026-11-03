@@ -36,7 +36,7 @@ type E struct {
 	Options *Options          // Options (optional) added to each NewRequest
 
 	Writer       io.Writer // used in [E.Get] as StreamWriter if no StreamWriter
-	StreamWriter W         `json:"-" gorm:"-"` // used as only handler **IF no handlers given**
+	StreamWriter W1        `json:"-" gorm:"-"` // used as only handler **IF no handlers given**
 
 	PreRequest func(request *ChatRequest) error `json:"-"`
 
@@ -143,7 +143,7 @@ func NewEndpoint(options *Options, tools []json.Marshaler) E {
 			"Authorization": "Bearer " + k,
 		}
 	}
-	var w1 W
+	var w1 W1
 	if DefaultWriter != nil {
 		w1 = W1{Writer: DefaultWriter, ThinkPre: DefaultThinkPre, ThinkPost: DefaultThinkPost}
 	}
@@ -253,6 +253,8 @@ type Options struct {
 
 // ChatResponse streamable has [ChatResponse.Handler]
 //
+// See [LMessage]
+//
 // Example:
 //
 //	var cr mllm.ChatResponse
@@ -292,6 +294,7 @@ type Usage struct {
 	PromptTokens int `json:"prompt_tokens,omitempty"`
 }
 
+// Message from [LMessage]
 type Message struct {
 	Role       string            `json:"role,omitempty"`
 	Content    string            `json:"content,omitempty"`
@@ -300,10 +303,14 @@ type Message struct {
 	ToolName   string            `json:"tool_name,omitempty" gorm:"default:null"`
 	ToolCallID string            `json:"tool_call_id,omitempty" gorm:"default:null"`
 	Images     [][]byte          `json:"images,omitempty" gorm:"serializer:json;type:jsonb;default:null;"`
-
-	//
-	Reasoning2 string `json:"reasoning,omitempty" gorm:"-"`         // Internal, DO NOT USE
-	Reasoning3 string `json:"reasoning_content,omitempty" gorm:"-"` // Internal, DO NOT USE
+	Message2   `gorm:"-"`
+}
+type Message2 struct {
+	// DO NOT USE
+	// ToolCalls2  *Call[json.RawMessage] `json:"tool_call,omitempty" gorm:"-"`         // Internal, DO NOT USE
+	ToolCallID2 string `json:"id,omitempty" gorm:"-"`                // Internal, DO NOT USE
+	Reasoning2  string `json:"reasoning,omitempty" gorm:"-"`         // Internal, DO NOT USE
+	Reasoning3  string `json:"reasoning_content,omitempty" gorm:"-"` // Internal, DO NOT USE
 }
 type Messages []Message
 
@@ -373,7 +380,7 @@ func (m Message) IsEmpty() bool {
 func (m Message) Equal(m2 Message) bool {
 	return m.Content == m2.Content && m.Reasoning == m2.Reasoning && m.Role == m2.Role &&
 		m.ToolName == m2.ToolName && m.ToolCallID == m2.ToolCallID &&
-		slices.EqualFunc(m.ToolCalls, m2.ToolCalls, bytesEqual) &&
+		//	slices.EqualFunc(m.ToolCalls, m2.ToolCalls, bytesEqual) &&
 		slices.EqualFunc(m.Images, m2.Images, bytesEqual)
 }
 
@@ -432,9 +439,9 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 				_, _ = fmt.Fprint(w, thinkpost)
 			}
 			if len(calls) != 0 && ToolWriter != nil {
-				for i := range calls {
-					_ = ToolWriter(w, calls[i])
-				}
+				///			for i := range calls {
+				//				_ = ToolWriter(w, calls[i])
+				//			}
 			} else { // toolwriter should print new line
 				_, _ = fmt.Fprint(w, "\n")
 			}
@@ -452,7 +459,7 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 }
 
 func toolWriter(w io.Writer, rawMessage json.RawMessage) (err error) {
-	return json.NewEncoder(w).Encode(map[string]any{"tool_call": rawMessage})
+	return json.NewEncoder(w).Encode(map[string]any{"mllm_tool_call": rawMessage})
 }
 
 func fflush(w io.Writer) {
@@ -509,9 +516,23 @@ func (e E) Stream(ctx context.Context, messages []Message, think any, handlers .
 		return Errorf("%w", ErrNoConvo)
 	}
 	if e := e.ValidateConfig(think); e != nil {
-		return e
+		return Errorf("%w", e)
 	}
-	if len(handlers) == 0 && e.StreamWriter != nil {
+	creq := e.NewRequest(messages, think)
+	if creq == nil {
+		return Errorf("could not create request")
+	}
+	if e.PreRequest != nil {
+		if err := e.PreRequest(creq); err != nil {
+			return Errorf("%w", err)
+		}
+	}
+	return e.Do(ctx, *creq, handlers)
+}
+
+// Do sends a [ChatRequest] and streams response in [E.Read]
+func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) error {
+	if len(handlers) == 0 && e.StreamWriter.Writer != nil {
 		handlers = []StreamHandler{e.StreamWriter.New()}
 	}
 	if len(handlers) == 0 && e.Writer != nil {
@@ -520,25 +541,11 @@ func (e E) Stream(ctx context.Context, messages []Message, think any, handlers .
 	if len(handlers) == 0 {
 		return Errorf("no stream handlers were given")
 	}
-	creq := e.NewRequest(messages, think)
-	if creq == nil {
-		return Errorf("could not create request")
-	}
-	if e.PreRequest != nil {
-		if err := e.PreRequest(creq); err != nil {
-			return err
-		}
-	}
-	return e.Do(ctx, *creq, handlers)
-}
-
-// Do sends a [ChatRequest] and streams response in [E.Read]
-func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) error {
 	bodyBytes, err := json.Marshal(creq)
 	if err != nil {
 		return Errorf("failed to marshal request: %w", err)
 	}
-	if creq.Options != nil && creq.Options.Debug { //nolint
+	if creq.Options != nil && creq.Debug {
 		Slog().Info("sending body", "js", json.RawMessage(bodyBytes))
 	}
 
@@ -575,6 +582,7 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 			}
 			Slog().Info("full response body", "js", copybuf.String())
 		}
+		slog.Error("error", "err", err)
 		return Errorf("%w", err)
 	}
 	return nil
@@ -584,6 +592,8 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 	lines := 0
 	var errs error
 	modeP1 := false
+	var currentCallIndex int
+	var currentCallID string
 	// stream
 	for {
 
@@ -608,19 +618,23 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 			trimmedLine = bytes.TrimSpace(post)
 			modeP1 = true
 		}
+
 		if len(trimmedLine) == 0 {
 			continue
 		}
-
 		var chunk ChatResponse
 		_ = modeP1 // TODO: use
-		if bytes.HasPrefix(trimmedLine, []byte("[DONE]")) {
+		if post, ok := bytes.CutPrefix(trimmedLine, []byte("[DONE]")); ok {
+			trimmedLine = bytes.TrimSpace(post)
+		}
+		if len(trimmedLine) == 0 {
 			continue
-		} else {
-			if err := json.Unmarshal(trimmedLine, &chunk); err != nil {
+		}
+		println("GOT LINE", len(trimmedLine), string(trimmedLine))
+		{
+			if err := json.Unmarshal(trimmedLine, &chunk); err != nil { // chunk
 				Slog().Error("decode cr", "err", err, "chunk", string(trimmedLine))
-				errs = errors.Join(errs, Errorf("%w", err))
-				continue
+				return Errorf("%w", err)
 			}
 			if chunk.DoneReason2 != "" {
 				chunk.Done = true
@@ -635,8 +649,26 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 				chunk.Message.Reasoning = chunk.Message.Reasoning3
 				chunk.Message.Reasoning3 = ""
 			}
+			if x := chunk.Message.ToolCallID2; x != "" {
+				chunk.Message.ToolCallID = x
+				chunk.Message.ToolCallID2 = ""
+			}
+			if len(chunk.Message.ToolCalls) != 0 {
+				println("collecting 2", len(chunk.Message.ToolCalls))
+				if err := chunkCollectCall(&chunk, nil); err != nil {
+					return Errorf("chunkCollectCall: %w", err)
+				}
+			}
+			_ = currentCallID
+			_ = currentCallIndex
 			for i := range chunk.Choices {
 				choice := &chunk.Choices[i]
+				if l := len(chunk.Message.ToolCalls); l != 0 {
+					println("collecting 1", l)
+					if err := chunkCollectCall(&chunk, choice); err != nil {
+						return Errorf("chunkCollectCall: %w", err)
+					}
+				}
 				if chunk.DoneReason2 != "" {
 					chunk.Done = true
 					chunk.DoneReason = chunk.DoneReason2
@@ -654,6 +686,11 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 				if ptr := choice.FinishReason; ptr != nil {
 					chunk.Done = true
 					chunk.DoneReason = *ptr
+				}
+				if x := chunk.Message.ToolCallID2; x != "" {
+					panic("oops")
+					//chunk.Message.ToolCallID = x
+					//chunk.Message.ToolCallID2 = ""
 				}
 				chunk.Message = chunk.Message.Add(choice.Delta)
 				//	Slog().Info("added delta", "c", chunk.Choices[i].Delta)
@@ -673,7 +710,7 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 			if err := handler(chunk); err != nil {
 				errs = errors.Join(errs, Errorf("handler %d/%d: %w", i+1, len(handlers), err))
 				if StopAtFirstHandlerError {
-					return errs
+					return Errorf("%w", errs)
 				}
 			}
 		}
@@ -681,7 +718,15 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 	if lines == 0 {
 		return Errorf("%w", ErrNoLines)
 	}
+	if errs != nil {
+		return Errorf("%w", errs)
+	}
 	return errs
+}
+
+func chunkCollectCall(chatResponse *ChatResponse, choice *Choice) error {
+	slog.Info("collecting tool call", "cr", chatResponse, "choice", choice)
+	return nil
 }
 
 func (e E) ValidateConfig(think any) error {
@@ -696,6 +741,9 @@ func (e E) ValidateConfig(think any) error {
 	_, thinkS := think.(string)
 	if !thinkB && !thinkS && think != nil {
 		errs = errors.Join(errs, Errorf("weird think type: %T", think))
+	}
+	if errs != nil {
+		return Errorf("%w", errs)
 	}
 	return errs
 }
@@ -720,8 +768,7 @@ func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse
 	//slog := Slog()
 	var chatResp ChatResponse
 	var handlers []StreamHandler
-	if e.StreamWriter != nil {
-		println("streamwriter")
+	if e.StreamWriter.Writer != nil {
 		handlers = []StreamHandler{e.StreamWriter.New(), chatResp.Handler}
 	} else if e.Writer != nil {
 		handlers = []StreamHandler{W1{e.Writer, DefaultThinkPre, DefaultThinkPost}.New(), chatResp.Handler}
@@ -733,7 +780,7 @@ func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse
 	}
 	err := e.Stream(ctx, messages, think, handlers...)
 	if err != nil {
-		return chatResp, Errorf("%w", err)
+		return chatResp, Errorf("Stream: %w", err)
 	}
 	return chatResp, nil
 }
@@ -760,45 +807,45 @@ func Summary(w io.Writer, st Stats) (err error) {
 	if st.TotalDuration != 0 {
 		_, err = fmt.Fprintf(w, "total duration:       %v\n", st.TotalDuration)
 		if err != nil {
-			return err
+			return Errorf("%w", err)
 		}
 	}
 	if st.LoadDuration != 0 {
 		_, err = fmt.Fprintf(w, "load duration:        %v\n", st.LoadDuration)
 		if err != nil {
-			return err
+			return Errorf("%w", err)
 		}
 	}
 	if st.PromptEvalCount != 0 {
 		_, err = fmt.Fprintf(w, "prompt eval count:    %d token(s)\n", st.PromptEvalCount)
 		if err != nil {
-			return err
+			return Errorf("%w", err)
 		}
 	}
 	if st.PromptEvalDuration != 0 {
 		_, err = fmt.Fprintf(w, "prompt eval duration: %s\n", st.PromptEvalDuration)
 		if err != nil {
-			return err
+			return Errorf("%w", err)
 		}
 		_, err = fmt.Fprintf(w, "prompt eval rate:     %.2f tokens/s\n", float64(st.PromptEvalCount)/st.PromptEvalDuration.Seconds())
 		if err != nil {
-			return err
+			return Errorf("%w", err)
 		}
 	}
 	if st.EvalCount != 0 {
 		_, err = fmt.Fprintf(w, "eval count:           %d token(s)\n", st.EvalCount)
 		if err != nil {
-			return err
+			return Errorf("%w", err)
 		}
 	}
 	if st.EvalDuration != 0 {
 		_, err = fmt.Fprintf(w, "eval duration:        %s\n", st.EvalDuration)
 		if err != nil {
-			return err
+			return Errorf("%w", err)
 		}
 		_, err = fmt.Fprintf(w, "eval rate:            %.2f tokens/s\n", float64(st.EvalCount)/st.EvalDuration.Seconds())
 		if err != nil {
-			return err
+			return Errorf("%w", err)
 		}
 	}
 	return nil

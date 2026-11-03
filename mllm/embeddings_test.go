@@ -58,7 +58,7 @@ func testEmbedNomicQuery(t *testing.T) {
 	ctx := t.Context()
 	x, err := mllm.Default().Embed(ctx, mllm.NewNomicQuery("testing test tester"))
 	if err != nil {
-		println(string(err.(mllm.ErrorWithResponse).Body()))
+		//	println(string(err.(mllm.ErrorWithResponse).Body()))
 		t.Fatal(err)
 	}
 	if x == nil {

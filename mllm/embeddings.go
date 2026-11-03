@@ -144,7 +144,7 @@ func (e *EmbedResponse) GetEmbeddings() vector256.Vector256 {
 
 var DefaultEmbedOptions map[string]any // nil
 
-// NewEmbed
+// NewEmbed request
 func NewEmbed(s string) EmbedRequest {
 	reqBody := EmbedRequest{
 		Model:      "",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -47,10 +48,11 @@ func TestTool1(t *testing.T) {
 		client.Writer = os.Stderr
 		ctx := t.Context()
 		client.Tools = []json.Marshaler{echoTool}
+		think := false
 		println("---")
 		got, err := client.Get(ctx, mllm.Messages{
 			{Role: "user", Content: "use the tool to say hello world"},
-		}, "low")
+		}, think)
 		println("---")
 		if err != nil {
 			t.Fatal(err)
@@ -63,7 +65,11 @@ func TestTool1(t *testing.T) {
 		var call mllm.Call[struct {
 			Input string `json:"input"`
 		}]
-		err = json.Unmarshal(got.Message.ToolCalls[0], &call)
+		//		call.FromPlain()
+		if true {
+			return
+		}
+		err = json.Unmarshal(got.Message.ToolCalls[0], &call.Function.Arguments)
 		if err != nil {
 			t.Fatal("decode", err)
 		}
@@ -95,13 +101,10 @@ func TestTool1(t *testing.T) {
 				t.Fatal("expected tool calls")
 			}
 			var call mllm.Call[struct{ Path string }]
+			if err := call.FromRaw(got.Message.ToolCalls[0]); err != nil {
+				t.Fatal(err)
+			}
 			{
-				// slog.Info("raw call", "raw", got.Message.ToolCalls[0])
-				// parse args
-				err = json.Unmarshal(got.Message.ToolCalls[0], &call)
-				if err != nil {
-					t.Fatal("decode", err)
-				}
 				if call.Function.Name != "cat_tester" {
 					t.Fatalf("expected cat_tester call, got %q", call.Function.Name)
 				}
@@ -141,7 +144,8 @@ func TestTool1(t *testing.T) {
 
 func testerr(t *testing.T, err error) {
 	if err != nil {
-		t.Fatal(err)
+		debug.PrintStack()
+		t.Fatalf("%+v", err)
 	}
 }
 
@@ -162,7 +166,7 @@ func TestToolBasic(t *testing.T) {
 	}
 	client := mllm.Default()
 	client.Writer = os.Stderr
-	client.StreamWriter = nil
+	client.StreamWriter.Writer = nil
 	client.Tools = []json.Marshaler{realtool}
 	convo := mllm.Messages{
 		{Role: "user", Content: "use the tool to read foo.txt, tell me the value it contains, no markdown"},
@@ -170,17 +174,45 @@ func TestToolBasic(t *testing.T) {
 
 	// 1. generate
 	caller, err := client.Get(ctx, convo, false)
-	testerr(t, err)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
 	convo = append(convo, caller.Message) // IMPORTANT: add to convo for post-tool response
 
 	if len(caller.Message.ToolCalls) == 0 {
 		t.Fatal("llm did not choose to call tool function")
 	}
 	// 2. toolrunner parses args to route to a tool function
-	var call mllm.Call[map[string]any]
-	err = json.Unmarshal(caller.Message.ToolCalls[0], &call)
-	testerr(t, err)
+	// var call mllm.Call[map[string]any]
 
+	/*
+		var calls []
+		index := 0
+		for _, js := range caller.Message.ToolCalls {
+			var call mllm.Call[json.RawMessage]
+			if err := json.Unmarshal(js, &call); err != nil {
+				println("tried json:", string(js))
+				t.Fatalf("Unmarshal Call[string] %+v", err)
+			}
+			if len(calls) == 0 || index != call.Index {
+				calls = append(calls, call.ToJSON())
+				index = call.Index
+				continue
+			}
+			l := len(calls)
+			calls[l-1].Function.Arguments = append(calls[l-1].Function.Arguments, args...)
+		}*/
+	// do something if completed?
+	//	println(len(caller.Message.ToolCalls), string(caller.Message.ToolCalls[0].Function.Arguments))
+	// err = json.Unmarshal(caller.Message.ToolCalls[0], &call)
+	// testerr(t, err)
+
+	var call mllm.Call[struct{ Path string }]
+	fmt.Printf("tried %d: %q", len(caller.Message.ToolCalls), string(caller.Message.ToolCalls[0]))
+	err = call.FromRaw(caller.Message.ToolCalls[0])
+	if err != nil {
+		t.Fatal(err)
+	}
 	// 3. find tool based on name
 	if call.Function.Name != catTool2.GetName() {
 		t.Fatalf("llm didnt pick the right tool (wanted %q got %q)", catTool2.GetName(), call.Function.Name)
@@ -189,12 +221,12 @@ func TestToolBasic(t *testing.T) {
 	// 4. extract Exec func
 	type ExecFunc = (func(ctx context.Context, args map[string]any) (any, error)) // your tool function signature
 	toolexecfn := realtool.Exec.(ExecFunc)
-	if call.Function.Arguments["path"] != "foo.txt" {
-		t.Fatalf("expected foo.txt but got %q", call.Function.Arguments["path"])
+	if call.Function.Arguments.Path != "foo.txt" {
+		t.Fatalf("expected foo.txt but got %q", call.Function.Arguments.Path)
 	}
 
 	// 5. get tool output, make new reply message
-	v, err := toolexecfn(ctx, call.Function.Arguments)
+	v, err := toolexecfn(ctx, call.Function.ArgsToMap())
 	testerr(t, err)
 	toolout := call.ReplyTool(v)
 	convo = append(convo, toolout) // IMPORTANT: add to convo for post-tool response
@@ -228,4 +260,13 @@ func TestTool_GetName(t *testing.T) {
 			}
 		})
 	}
+}
+
+func UnquoteJSON(v string) string {
+	var x string
+	if err := json.Unmarshal([]byte(v), &x); err != nil {
+		slog.Error("unquote json string", "err", err)
+		return v
+	}
+	return x
 }
