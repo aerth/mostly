@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -67,6 +68,9 @@ func (e E) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) 
 	if err != nil {
 		return nil, Errorf("%w", err)
 	}
+	for k, v := range e.Headers {
+		request.Header.Set(k, v)
+	}
 	got, err := e.Client.Do(request)
 	if err != nil {
 		return nil, Errorf("%w", err)
@@ -86,7 +90,18 @@ func (e E) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) 
 	if len(resp.Data) != 0 && len(resp.Embeddings) == 0 {
 		resp.Embeddings = []vector256.Vector256{resp.Data[0].Embedding}
 	}
+	if len(resp.Error) > 4 {
+
+		code := 42
+		msg := "error"
+		json.Unmarshal(resp.Error, &struct {
+			Code    *int
+			Message *string
+		}{Code: &code, Message: &msg})
+		return resp, ErrorWithResponse{error: fmt.Errorf("%d: %s", code, msg), body: buf}
+	}
 	if len(resp.Embeddings) == 0 {
+		slog.Error("no embeddings in response", "x", resp)
 		return resp, ErrorWithResponse{error: fmt.Errorf("none"), body: buf}
 	}
 	return resp, nil
@@ -129,7 +144,9 @@ type EmbedResponse struct {
 	Data       []*struct {
 		Embedding vector256.Vector256
 	} `json:"data,omitempty"`
-	Stats // limited for this endpoint
+	Stats                   // limited for this endpoint
+	Error   json.RawMessage `json:"error,omitempty"`
+	Message json.RawMessage `json:"message,omitempty"`
 }
 
 func (e *EmbedResponse) GetEmbeddings() vector256.Vector256 {
