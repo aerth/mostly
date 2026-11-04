@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -87,9 +88,6 @@ func (e E) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) 
 	if err != nil {
 		return nil, ErrorWithResponse{error: Errorf("%w", err), body: buf}
 	}
-	if len(resp.Data) != 0 && len(resp.Embeddings) == 0 {
-		resp.Embeddings = []vector256.Vector256{resp.Data[0].Embedding}
-	}
 	if len(resp.Error) > 4 {
 
 		code := 42
@@ -100,9 +98,20 @@ func (e E) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) 
 		}{Code: &code, Message: &msg})
 		return resp, ErrorWithResponse{error: fmt.Errorf("%d: %s", code, msg), body: buf}
 	}
+	if len(resp.Data) != 0 && len(resp.Embeddings) == 0 {
+		resp.Embeddings = []vector256.Vector256{resp.Data[0].Embedding}
+		resp.Data = nil
+	}
 	if len(resp.Embeddings) == 0 {
 		slog.Error("no embeddings in response", "x", resp)
 		return resp, ErrorWithResponse{error: fmt.Errorf("none"), body: buf}
+	}
+	em := resp.Embeddings[0]
+	// quirk: llama.cpp no dimensions in request?
+	if req.Dimensions != 0 && len(em) > req.Dimensions {
+		em = em[:req.Dimensions] // will edit in place
+		em = L2normalize(em)
+		resp.Embeddings = []vector256.Vector256{em}
 	}
 	return resp, nil
 }
@@ -172,6 +181,38 @@ func NewEmbed(s string) EmbedRequest {
 		KeepAlive:  -1,
 	}
 	return reqBody
+}
+
+func L2normalize[T float32 | float64](v []T) []T {
+	var sumSquares float64
+	for _, val := range v {
+		sumSquares += float64(val) * float64(val)
+	}
+	norm := T(math.Sqrt(sumSquares))
+	if norm == 0 {
+		return v
+	}
+	for i := range v {
+		v[i] = v[i] / norm
+	}
+	return v
+}
+
+func L2normalizeA[T float32 | float64](v []T) []T {
+	var sumSquares float64
+	for _, val := range v {
+		sumSquares += float64(val) * float64(val)
+	}
+	norm := T(math.Sqrt(sumSquares))
+	if norm == 0 {
+		return v
+	}
+
+	normalized := make([]T, len(v))
+	for i, val := range v {
+		normalized[i] = val / norm
+	}
+	return normalized
 }
 
 // NewNomicQuery adds `search_query: ` prefix to the given string

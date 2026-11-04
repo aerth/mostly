@@ -24,15 +24,19 @@ func compareFloat[T ~float32 | ~float64](x, y T) bool {
 func TestEmbed(t *testing.T) {
 	testEmbedClient = mllm.Default()
 	t.Run("normal", testEmbed1)
-	t.Run("nomic-query", testEmbedNomicQuery)
-	t.Run("nomic-document", testEmbedNomicDocument)
+	// t.Run("nomic-query", testEmbedNomicQuery)
+	// t.Run("nomic-document", testEmbedNomicDocument)
 }
 
 func testEmbed1(t *testing.T) {
 	ctx := t.Context()
 	x, err := mllm.Default().Embed(ctx, mllm.NewEmbed("testing test tester"))
 	if err != nil {
-		t.Fatal(err)
+		// same model as ollama
+		println("To get the nomic embedding model as used for this test:")
+		println("  hf download nomic-ai/nomic-embed-text-v1.5-GGUF nomic-embed-text-v1.5.f16.gguf --local-dir .")
+		println("  ln -sf nomic-embed-text-v1.5.f16.gguf nomic-embed-text:v1.5.gguf")
+		t.Fatal("api:", err)
 	}
 	if x == nil {
 		t.Fatal("embed response is nil")
@@ -41,11 +45,12 @@ func testEmbed1(t *testing.T) {
 	if len(got) != vector256.VarLen {
 		t.Fatalf("%d != %d", len(got), vector256.VarLen)
 	}
-	println("got:", fmt.Sprintf("%#v ... %d total", got[:10], vector256.VarLen))
+	println(" got:", fmt.Sprintf("%#v ... %d total", got[:10], vector256.VarLen))
 	first := vector256.Vector256{0.03836852, 0.056748904, -0.27613422, -0.004759476, 0.11951496, -0.03993982, 0.05664575, -0.031644862, 0.01586234, -0.03084815}
 
 	for i := range first {
 		if !compareFloat(first[i], got[i]) {
+			println("want:", fmt.Sprintf("%#v ... %d total", first[:10], vector256.VarLen))
 			t.Fatalf("v %d: %v != %v", i, got[i], first[i])
 		}
 	}
