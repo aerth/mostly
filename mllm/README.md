@@ -114,7 +114,7 @@ In this package, a **Tool** contains an "Exec" function (who's signature is up t
 A tool **Call**, given by LLM, has "Arguments", (which may be an object or stringified object, or null or empty string).
 This package does not run tools, or care what function signature you use as tool's Exec, and therefore you must implement your own "tool runner".
 
-An example tool runner is in [cmd/example](./cmd/example/)
+An example tool runner is [explainfile](../cmd/explainfile/main.go)
 
 See also: [tool test file](./tools_test.go)
 
