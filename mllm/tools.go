@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 )
 
 // Tool has JSON spec and Exec func
@@ -28,8 +29,53 @@ func (tt Tools) ByName(name string) Tool {
 	return Tool{}
 }
 
+// Run returns the raw tool output, such as `42` or `"foo"` or `{"foo": 42}`
+//
+// Tool Runner should wrap this in a [ReplyTool] or [ReplyToolOrError]
+func (tt Tools) Run(ctx context.Context, name string, args any) (output any, err error) {
+	tool := tt.ByName(name)
+	if tool.Exec == nil {
+		return nil, fmt.Errorf("tool not found")
+	}
+	switch fn := tool.Exec.(type) {
+	case CallFuncV1:
+		var m map[string]any
+		switch x := args.(type) {
+		case map[string]any:
+			m = x
+		case json.RawMessage:
+			m = map[string]any{}
+			if err := json.Unmarshal(x, &m); err != nil {
+				return nil, fmt.Errorf("arg not object: %w", err)
+			}
+		default:
+			return nil, fmt.Errorf("invalid args type %T", args)
+		}
+		return fn(ctx, m)
+	case CallFuncV1B:
+		var m json.RawMessage
+		switch x := args.(type) {
+		case map[string]any:
+			js, err := json.Marshal(x)
+			if err != nil {
+				return nil, err
+			}
+			m = js
+		case json.RawMessage:
+			m = x
+		default:
+			return nil, fmt.Errorf("invalid args type %T", args)
+		}
+		return fn(ctx, m)
+	}
+	return nil, fmt.Errorf("no runner")
+}
+
 // CallFuncV1 is completly optional and any may be used by a custom toolrunner
-type CallFuncV1 = func(ctx context.Context, args map[string]any) (output any, err error)
+type (
+	CallFuncV1  = func(ctx context.Context, args map[string]any) (output any, err error)
+	CallFuncV1B = func(ctx context.Context, args json.RawMessage) (output any, err error)
+)
 
 func (t Tool) GetName() string {
 	var x Name
@@ -91,19 +137,32 @@ func (c Call[T]) ToRaw() Call[json.RawMessage] {
 	}
 }
 
+var ddebug = false
+
 func (c *Call[T]) FromRaw(js json.RawMessage) error {
 	if len(js) == 0 {
 		return nil
 	}
-	if js[0] != '{' {
-		println("FromRaw given stringified object")
+	isString := false
+	if _, ok := any(c.Function.Arguments).(string); ok {
+		isString = true
+		println("STRING")
+	} else {
+		println(fmt.Sprintf("%T NOT STRING", c.Function.Arguments))
+	}
+	if !isString && js[0] != '{' {
+		if ddebug {
+			println("FromRaw given stringified object")
+		}
 		var v string
 		if err := json.Unmarshal(js, &v); err != nil {
 			return fmt.Errorf("unwrap stage 1: %w", err)
 		}
 		js = json.RawMessage(v)
 	} else {
-		fmt.Printf("FromRaw is object direct %T: %s\n", c.Function.Arguments, string(js))
+		if ddebug {
+			fmt.Printf("FromRaw given a object direct %T: %s\n", c.Function.Arguments, string(js))
+		}
 	}
 	err := json.Unmarshal(js, &c)
 	if err != nil {
@@ -181,8 +240,9 @@ func (c *Call[T]) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return fmt.Errorf("unmarshal plain call: %w", err)
 	}
+	isString := fmt.Sprintf("%T", c.Function.Arguments) == "string"
 	// case: "arguments": "{\"foo\": \"bar\"}"
-	if len(rawcall.Function.Arguments) > 2 && rawcall.Function.Arguments[0] == '"' && rawcall.Function.Arguments[1] == '{' {
+	if !isString && len(rawcall.Function.Arguments) > 2 && rawcall.Function.Arguments[0] == '"' && rawcall.Function.Arguments[1] == '{' {
 		// unquote
 		var z string
 		err = json.Unmarshal(rawcall.Function.Arguments, &z)
@@ -198,6 +258,7 @@ func (c *Call[T]) UnmarshalJSON(b []byte) error {
 	*c = Call[T]{
 		ID:    rawcall.ID,
 		Index: rawcall.Index,
+		Type:  "function",
 	}
 	c.Function.Name = rawcall.Function.Name
 	// decode args
@@ -206,7 +267,8 @@ func (c *Call[T]) UnmarshalJSON(b []byte) error {
 	if len(rawcall.Function.Arguments) != 0 {
 		err = json.Unmarshal(rawcall.Function.Arguments, &args)
 		if err != nil {
-			return err
+			debug.PrintStack()
+			return fmt.Errorf("unmarshal inner args %T: %w", args, err)
 		}
 	}
 	c.Function.Arguments = args
@@ -222,6 +284,13 @@ func (c Call[T]) ReplyToolOrError(val any, err error) Message {
 		return ReplyTool(c, err)
 	}
 	return ReplyTool(c, val)
+}
+
+func ReplyToolOrError[T any](call Call[T], val any, err error) Message {
+	if err != nil {
+		return ReplyTool(call, err)
+	}
+	return ReplyTool(call, val)
 }
 
 func ReplyTool[T any](call Call[T], val any) Message {

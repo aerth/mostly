@@ -111,7 +111,13 @@ func firstEnv(k []string) string {
 	return ""
 }
 
-var ForcePath = false
+var (
+	DefaultOptions = Options{
+		Temperature: new(1.0),
+		Seed:        -1,
+	}
+	ForcePath = false
+)
 
 var ToolWriter = toolWriter
 
@@ -119,8 +125,11 @@ var ToolWriter = toolWriter
 //
 // See [E.StreamBG] or [E.Stream] or [E.Get]
 func NewEndpoint(options *Options, tools []json.Marshaler) E {
+	if options == nil {
+		options = new(DefaultOptions)
+	}
 	if DebugLLM2 && (options == nil) {
-		options = &Options{Debug: true}
+		options = &Options{Debug: 2}
 	}
 	model := firstEnv(EnvModel)
 	host := firstEnv(EnvHost)
@@ -155,7 +164,7 @@ func NewEndpoint(options *Options, tools []json.Marshaler) E {
 }
 
 // DefaultWriter added to all new endpoints
-var DefaultWriter io.Writer = nil
+var DefaultWriter io.Writer = os.Stderr
 
 // Default creates a new reusable LLM endpoint from env using [NewEndpoint] with no tools no options.
 var Default = func() E {
@@ -248,7 +257,7 @@ type Options struct {
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"` // -2.0 to 2.0
 	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`  // -2.0 to 2.0
 	//
-	Debug bool `json:"-"` // internal, for printing full chatrequest before sending
+	Debug int `json:"-"` // internal, for printing full chatrequest before sending
 }
 
 // ChatResponse streamable has [ChatResponse.Handler]
@@ -439,9 +448,9 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 				_, _ = fmt.Fprint(w, thinkpost)
 			}
 			if len(calls) != 0 && ToolWriter != nil {
-				///			for i := range calls {
-				//				_ = ToolWriter(w, calls[i])
-				//			}
+				for i := range calls {
+					_ = ToolWriter(w, calls[i])
+				}
 			} else { // toolwriter should print new line
 				_, _ = fmt.Fprint(w, "\n")
 			}
@@ -545,7 +554,7 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 	if err != nil {
 		return Errorf("failed to marshal request: %w", err)
 	}
-	if creq.Options != nil && creq.Debug {
+	if creq.Options != nil && creq.Debug > 1 {
 		Slog().Info("sending body", "js", json.RawMessage(bodyBytes))
 	}
 
@@ -577,23 +586,54 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 	err = e.Read(reader, handlers...)
 	if err != nil {
 		if !Quiet {
-			if e.Options == nil || !e.Options.Debug {
+			if e.Options == nil || e.Options.Debug < 2 {
 				Slog().Info("sent request body", "js", json.RawMessage(bodyBytes))
 			}
 			Slog().Info("full response body", "js", copybuf.String())
 		}
-		slog.Error("error", "err", err)
+		slog.Error("errorreading", "err", err)
 		return Errorf("%w", err)
 	}
 	return nil
 }
 
+type (
+	Calls[T any] []Call[T]
+	StringCalls  []Call[string]
+)
+
+// Combined fragments of tool calls into final calls (one per index) instead of bunch of fragments
+func (c StringCalls) Combined() Calls[string] {
+	var a StringCalls
+	for i := range c {
+		if len(a) == 0 || c[i].Index != a[len(a)-1].Index {
+			a = append(a, c[i])
+		} else {
+			a[len(a)-1].Function.Arguments += c[i].Function.Arguments
+		}
+	}
+	return Calls[string](a)
+}
+
+func (c Calls[T]) ToJSON() []json.RawMessage {
+	if len(c) == 0 {
+		return nil
+	}
+	a := make([]json.RawMessage, len(c))
+	for i := range c {
+		a[i] = c[i].ToJSON()
+	}
+	return a
+}
+
+// Read a stream, collecting for StreamHandlers
 func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 	lines := 0
 	var errs error
 	modeP1 := false
 	var currentCallIndex int
 	var currentCallID string
+	var callsparsed StringCalls
 	// stream
 	for {
 
@@ -630,7 +670,7 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 		if len(trimmedLine) == 0 {
 			continue
 		}
-		println("GOT LINE", len(trimmedLine), string(trimmedLine))
+		//	println("GOT LINE", len(trimmedLine), string(trimmedLine))
 		{
 			if err := json.Unmarshal(trimmedLine, &chunk); err != nil { // chunk
 				Slog().Error("decode cr", "err", err, "chunk", string(trimmedLine))
@@ -653,20 +693,17 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 				chunk.Message.ToolCallID = x
 				chunk.Message.ToolCallID2 = ""
 			}
-			if len(chunk.Message.ToolCalls) != 0 {
-				println("collecting 2", len(chunk.Message.ToolCalls))
-				if err := chunkCollectCall(&chunk, nil); err != nil {
-					return Errorf("chunkCollectCall: %w", err)
-				}
-			}
 			_ = currentCallID
 			_ = currentCallIndex
 			for i := range chunk.Choices {
 				choice := &chunk.Choices[i]
-				if l := len(chunk.Message.ToolCalls); l != 0 {
-					println("collecting 1", l)
-					if err := chunkCollectCall(&chunk, choice); err != nil {
+				if l := len(choice.Delta.ToolCalls); l != 0 {
+					if callsfound, err := chunkCollectCall(&chunk, choice); err != nil {
 						return Errorf("chunkCollectCall: %w", err)
+					} else if len(callsfound) != 0 {
+						callsparsed = append(callsparsed, callsfound...)
+						chunk.Message.ToolCalls = nil
+						choice.Delta.ToolCalls = nil
 					}
 				}
 				if chunk.DoneReason2 != "" {
@@ -701,10 +738,13 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 			}
 			chunk.Choices = nil
 		}
-		if !chunk.Done && chunk.Message.IsEmpty() {
+		if !chunk.Done && len(callsparsed) == 0 && chunk.Message.IsEmpty() {
 			Slog().Warn("possible decode issue", "from", string(trimmedLine))
 		} else if chunk.Message.Role == "" {
 			chunk.Message.Role = "assistant"
+		}
+		if chunk.Done {
+			chunk.Message.ToolCalls = callsparsed.Combined().ToJSON()
 		}
 		for i, handler := range handlers {
 			if err := handler(chunk); err != nil {
@@ -724,9 +764,16 @@ func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
 	return errs
 }
 
-func chunkCollectCall(chatResponse *ChatResponse, choice *Choice) error {
-	slog.Info("collecting tool call", "cr", chatResponse, "choice", choice)
-	return nil
+func chunkCollectCall(chatResponse *ChatResponse, choice *Choice) ([]Call[string], error) {
+	var a []Call[string]
+	for i := range choice.Delta.ToolCalls {
+		var x Call[string]
+		if err := json.Unmarshal(choice.Delta.ToolCalls[i], &x); err != nil {
+			return nil, err
+		}
+		a = append(a, x)
+	}
+	return a, nil
 }
 
 func (e E) ValidateConfig(think any) error {
@@ -769,12 +816,13 @@ func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse
 	var chatResp ChatResponse
 	var handlers []StreamHandler
 	if e.StreamWriter.Writer != nil {
-		handlers = []StreamHandler{e.StreamWriter.New(), chatResp.Handler}
+		handlers = []StreamHandler{e.StreamWriter.New()}
 	} else if e.Writer != nil {
-		handlers = []StreamHandler{W1{e.Writer, DefaultThinkPre, DefaultThinkPost}.New(), chatResp.Handler}
+		handlers = []StreamHandler{W1{e.Writer, DefaultThinkPre, DefaultThinkPost}.New()}
 	} else {
-		handlers = []StreamHandler{chatResp.Handler} // no printing
+		handlers = []StreamHandler{} // no printing
 	}
+	handlers = append(handlers, chatResp.Handler)
 	if len(e.Handlers) != 0 {
 		handlers = append(handlers, e.Handlers...)
 	}

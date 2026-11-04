@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,13 @@ import (
 
 func TestMain(t *testing.M) {
 	slog.SetDefault(slog.New(
-		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true}),
+		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true, ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.SourceKey {
+				path := a.Value.Any().(*slog.Source)
+				a.Value = slog.StringValue(fmt.Sprintf("%s:%d", filepath.Base(path.File), path.Line))
+			}
+			return a
+		}}),
 	)) // log json to stdout
 	def := mllm.Default()
 

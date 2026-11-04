@@ -3,6 +3,7 @@ package mllm_test
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,29 @@ import (
 )
 
 type Tool = mllm.Tool
+
+func init() {
+	flag.Float64Var(mllm.DefaultOptions.Temperature, "temperature", *mllm.DefaultOptions.Temperature, "t")
+}
+
+func TestRandom(t *testing.T) {
+	println(1)
+	client := mllm.Default()
+	ctx := t.Context()
+
+	println(2)
+	l := 3
+	for i := range l {
+		println("Part", i+1)
+		_, err := client.Get(ctx, mllm.Messages{
+			{Role: "system", Content: fmt.Sprintf("You are a story writer. For each topic given, reply with the first sentence of  part %d of %d of the short story.", i+1, l)},
+			{Role: "user", Content: "A story about dragons"},
+		}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 // echoTool has no exec (fake tool)
 var echoTool = Tool{
@@ -82,16 +106,20 @@ func TestTool1(t *testing.T) {
 		slog.Info("got call", "call", call)
 	})
 	for _, realtool := range []Tool{catTool2, catTool} {
+		// cat_true cat_false
 		t.Run(fmt.Sprintf("cat_%v", realtool.Exec != nil), func(t *testing.T) {
 			//		slog.Info("testing cat", "with_func", realtool.Exec != nil)
 			ctx := t.Context()
 			client := mllm.Default()
+			client.StreamWriter.Writer = nil
 			client.Writer = os.Stderr
+			client.Options = &mllm.Options{
+				Temperature: new(1.0),
+			}
 			client.Tools = []json.Marshaler{realtool}
 			convo := mllm.Messages{
 				{Role: "user", Content: "use the tool to read foo.txt, tell me the value it contains, no markdown"},
 			}
-			println("---")
 			got, err := client.Get(ctx, convo, false)
 			println("---")
 			if err != nil {
@@ -102,7 +130,8 @@ func TestTool1(t *testing.T) {
 			}
 			var call mllm.Call[struct{ Path string }]
 			if err := call.FromRaw(got.Message.ToolCalls[0]); err != nil {
-				t.Fatal(err)
+				println("raw:", string(got.Message.ToolCalls[0]))
+				t.Fatalf("fromraw: %+v", err)
 			}
 			{
 				if call.Function.Name != "cat_tester" {
