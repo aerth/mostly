@@ -415,6 +415,7 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 	reasoning := false
 	hidethink := HideThink
 	hidetools := HideTools
+	wrote := false
 	var calls []json.RawMessage
 	return func(cr ChatResponse) error {
 		msg := cr.Message
@@ -430,6 +431,7 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 			}
 			_, _ = fmt.Fprint(w, think)
 			fflush(w)
+			wrote = true
 		}
 		if content != "" {
 			if reasoning {
@@ -439,6 +441,7 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 			}
 			_, _ = fmt.Fprint(w, content)
 			fflush(w)
+			wrote = true
 		}
 		if !hidetools && len(cr.Message.ToolCalls) != 0 {
 			calls = append(calls, cr.Message.ToolCalls...)
@@ -451,13 +454,14 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 				for i := range calls {
 					_ = ToolWriter(w, calls[i])
 				}
-			} else { // toolwriter should print new line
-				_, _ = fmt.Fprint(w, "\n")
+			} else if wrote { // toolwriter should print new line
+				_, _ = fmt.Fprint(w, "XX\n")
 			}
 			fflush(w)
 
 			// be kind rewind
 			calls = nil
+			wrote = false
 			reasoning = false
 			hidethink = HideThink
 			hidetools = HideTools

@@ -20,6 +20,15 @@ type Spec = json.RawMessage
 
 type Tools []Tool
 
+func (tt Tools) ToJSON() []json.Marshaler {
+	a := make([]json.Marshaler, len(tt))
+	for i := range tt {
+		js, _ := WrapToolSpec(tt[i].Spec)
+		a[i] = json.RawMessage(js)
+	}
+	return a
+}
+
 func (tt Tools) ByName(name string) Tool {
 	for i := range tt {
 		if tt[i].GetName() == name {
@@ -68,7 +77,7 @@ func (tt Tools) Run(ctx context.Context, name string, args any) (output any, err
 		}
 		return fn(ctx, m)
 	}
-	return nil, fmt.Errorf("no runner")
+	return nil, fmt.Errorf("no runner for sig %T", tool.Exec)
 }
 
 // CallFuncV1 is completly optional and any may be used by a custom toolrunner
@@ -146,7 +155,7 @@ func (c *Call[T]) FromRaw(js json.RawMessage) error {
 	isString := false
 	if _, ok := any(c.Function.Arguments).(string); ok {
 		isString = true
-		println("STRING")
+		//	println("STRING")
 	} else {
 		println(fmt.Sprintf("%T NOT STRING", c.Function.Arguments))
 	}
