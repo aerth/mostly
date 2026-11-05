@@ -2,8 +2,10 @@ package cancellable
 
 import "context"
 
-var _ Cancellable = (*cancellableChan[uint])(nil)
-var _ Chan[uint] = (*cancellableChan[uint])(nil)
+var (
+	_ Cancellable = (*cancellableChan[uint])(nil)
+	_ Chan[uint]  = (*cancellableChan[uint])(nil)
+)
 
 var CHANBUFSIZE = 1000 // default buffer size for NewChan
 
@@ -34,8 +36,8 @@ func WrapChan[T any](parent context.Context, cancelfunc context.CancelCauseFunc,
 		ch = make(chan T, CHANBUFSIZE)
 	}
 	return &cancellableChan[T]{
-		cancellable: newFrom(parent, cancelfunc),
-		ch:          ch,
+		CancellableImplV1: newFrom(parent, cancelfunc),
+		ch:                ch,
 	}
 }
 
@@ -46,8 +48,12 @@ func NewChan[T any](parent context.Context) Chan[T] {
 }
 
 type cancellableChan[T any] struct {
-	*cancellable
+	*CancellableImplV1
 	ch chan T
+}
+
+func (c *cancellableChan[T]) Ch() chan<- T {
+	return c.ch
 }
 
 func (c *cancellableChan[T]) UpdatesChan() <-chan T {
@@ -82,8 +88,4 @@ func (c *cancellableChan[T]) Updates2() []T {
 			return updates
 		}
 	}
-}
-
-func (c *cancellableChan[T]) Ch() chan<- T {
-	return c.ch
 }
