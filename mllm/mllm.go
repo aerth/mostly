@@ -44,6 +44,13 @@ type E struct {
 	Handlers []StreamHandler `json:"-"`
 }
 
+func (e E) Generate(ctx context.Context, sys string, usr string, think any) (Message, error) {
+	return e.GetMessage(ctx, Messages{
+		{Role: "system", Content: sys},
+		{Role: "user", Content: usr},
+	}, think)
+}
+
 func ToMarshalers(v ...json.Marshaler) []json.Marshaler {
 	return v
 }
@@ -455,7 +462,7 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 					_ = ToolWriter(w, calls[i])
 				}
 			} else if wrote { // toolwriter should print new line
-				_, _ = fmt.Fprint(w, "XX\n")
+				_, _ = fmt.Fprint(w, "\n")
 			}
 			fflush(w)
 
