@@ -10,15 +10,22 @@ When using `slog` package, the trace is simplified to a single-line.
 
 Cancellable Channel Context [superchan](./superchan/)
 
+```go
+ import "github.com/aerth/mostly/superchan"
+ var mainctx = superchan.NewMain(newmainctx, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM).(*superchan.Superchan[os.Signal])
+ var _ context.CancelCauseFunc = mainctx.Cancel
+
+```
+
 ## ncode
 
 [encoding](./ncode/), twist arrays (`[]string -> []MyString -> []string`)
 
-## anydb 
+## anydb
 
 store/fetch bbolt.DB helpers for nested buckets (path as `[][]byte` or `[]string`)
 
-*(anydb was removed to keep go.mod empty)*
+_(anydb was removed to keep go.mod empty)_
 
 ## httpserver
 
