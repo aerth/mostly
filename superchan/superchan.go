@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -40,7 +41,6 @@ var UseGoroutineDefer = true
 func Flags() {
 	flagpkg.InverseBoolVar(&CancelBeforeDefer, "defer-first", CancelBeforeDefer, "server: cancel last")
 	flagpkg.InverseBoolVar(&UseGoroutineDefer, "defer-ordered", UseGoroutineDefer, "server: run deferred funcs in sequence")
-
 }
 
 // Superchan handles signals, is a cancellable.Chan[os.Signal] with defer funcs
@@ -242,7 +242,6 @@ func New[T any](parent context.Context, handler func(context.Context, T) error, 
 					}
 				}
 			}
-
 		}
 	}()
 	return chctx
@@ -252,7 +251,7 @@ func NewRaw[T any](parent context.Context) *Superchan[T] {
 	return &Superchan[T]{Chan: cancellable.NewChan[T](parent), deferfuncs: []func(){}} // non-nil
 }
 
-// New Double Superchan for processing a channel, with handler func, defer funcs and cancellation.
+// NewDouble Superchan for processing a channel, with handler func, defer funcs and cancellation.
 //
 // Send to chctx.Ch() and cancel everything with chctx.Cancel(err).
 //
@@ -288,35 +287,45 @@ func NewDouble[T any](parent context.Context, handler func(context.Context, **T)
 					handledoublein(chctx, chctx2, in, handler)
 				}
 			}
-
 		}
 	}()
 	return chctx, chctx2
 }
 
+// receive ch1 send to ch2
 // may or may not be called in a goroutine
-func handledoublein[T any](chctx *Superchan[T], chctx2 *Superchan[T], in T, handler func(context.Context, **T) error) {
-	if chctx.Err() != nil || chctx2.Err() != nil {
+func handledoublein[T any](ch1 *Superchan[T], ch2 *Superchan[T], in T, handler func(context.Context, **T) error) {
+	if ch1.Err() != nil || ch2.Err() != nil {
 		return
 	}
-	var input *T = &in
-	var out = &input
+	input := &in
+	out := &input
 	if handler != nil {
-		if err := handler(chctx2, out); err != nil {
-			chctx.Cancel(err) // should break loop and run deferred funcs
+		if err := handler(ch2, out); err != nil {
+			ch1.Cancel(err) // should break loop and run deferred funcs
+			return
+		}
+		if *out == nil { // handled by handler
 			return
 		}
 	}
-	if *out == nil {
-		//	println("handled by handler")
-		return
-	}
 	//println("output handler: ", **out)
 	select {
-	case <-chctx.Done():
-	case <-chctx2.Done():
-	case chctx2.Ch() <- **out:
+	case <-ch1.Done():
+		return
+	case <-ch2.Done():
+		return
 	default:
+	}
+	select {
+	case <-ch1.Done():
+	case <-ch2.Done():
+	case ch2.Ch() <- **out:
+		// ok
+	default:
+		Slog().Debug("buffer full", "l", len(ch2.Ch()))
 		//println("dropped") // buffer is full
 	}
 }
+
+var Slog = slog.Default
