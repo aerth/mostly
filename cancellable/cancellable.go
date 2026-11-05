@@ -1,3 +1,4 @@
+// Package cancellable combines Context, CancelCauseFunc with Wait
 package cancellable
 
 import "context"
@@ -21,29 +22,37 @@ func NewFrom(the context.Context, cancelfunc context.CancelCauseFunc) Cancellabl
 	return newFrom(the, cancelfunc)
 }
 
-type cancellable struct {
+// CancellableImplV1 implementation
+type CancellableImplV1 struct {
 	context.Context
 	cancel context.CancelCauseFunc
 }
 
 // new cancellable context ptr, used by derived types that embed cancellable
-func newFrom(the context.Context, cancelfunc context.CancelCauseFunc) *cancellable {
-	return &cancellable{
+func newFrom(the context.Context, cancelfunc context.CancelCauseFunc) *CancellableImplV1 {
+	return &CancellableImplV1{
 		Context: the,
 		cancel:  cancelfunc,
 	}
 }
 
-func (c *cancellable) Cancel(err error) {
+// Cancel calls the underlying cancel func.
+//
+// Implements [Cancellable] and is [context.CancelCauseFunc]
+func (c *CancellableImplV1) Cancel(err error) {
 	if c.cancel == nil {
-		panic("cancellable: not initialized")
+		panic("cancellable: not initialized, error: " + err.Error())
 	}
 	c.cancel(err)
 }
-func (c *cancellable) GetContext() context.Context {
+
+// GetContext implements [Cancellable]
+func (c *CancellableImplV1) GetContext() context.Context {
 	return c.Context
 }
-func (c *cancellable) Wait() error {
+
+// Wait waits for underlying c.Context to be finished, returning Cause
+func (c *CancellableImplV1) Wait() error {
 	<-c.Done()
 	return context.Cause(c)
 }
