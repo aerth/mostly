@@ -85,7 +85,7 @@ func main() {
 		}]
 		err = json.Unmarshal(js, &call)
 		if err != nil {
-			println("fatal", err.Error())
+			println("bad json call decode fatal", err.Error())
 			os.Exit(1)
 		}
 		toolout, err := toolbox.Run(ctx, call.Function.Name, call.Function.ArgsToMap())
