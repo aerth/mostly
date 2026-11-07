@@ -29,6 +29,7 @@ type Tools []Tool
 type (
 	CallFuncV1  = func(ctx context.Context, args map[string]any) (output any, err error)
 	CallFuncV1B = func(ctx context.Context, args json.RawMessage) (output any, err error)
+	CallFuncV1C = func(ctx context.Context, m Message, index int) (output any, err error)
 )
 
 // Flags useful but not necessary
@@ -98,6 +99,41 @@ func (t Tools) ByName(name string) Tool {
 	return Tool{}
 }
 
+type ctxkey string
+
+const (
+	ctxkeyCaller    = ctxkey("caller")
+	ctxkeyCall      = ctxkey("call")
+	ctxkeyCallIndex = ctxkey("call-index")
+)
+
+func WithCaller(ctx context.Context, caller Message) context.Context {
+	return context.WithValue(ctx, ctxkeyCaller, caller)
+}
+
+func WithCall[T any](ctx context.Context, call Call[T]) context.Context {
+	return context.WithValue(ctx, ctxkeyCall, call)
+}
+
+func WithCallIndex(ctx context.Context, index int) context.Context {
+	return context.WithValue(ctx, ctxkeyCall, index)
+}
+
+func CtxCaller(ctx context.Context) (Message, bool) {
+	x, ok := ctx.Value(ctxkeyCaller).(Message)
+	return x, ok
+}
+
+func CtxCallIndex(ctx context.Context) (int, bool) {
+	x, ok := ctx.Value(ctxkeyCallIndex).(int)
+	return x, ok
+}
+
+func CtxCall[T any](ctx context.Context) (Call[T], bool) {
+	x, ok := ctx.Value(ctxkeyCaller).(Call[T])
+	return x, ok
+}
+
 // Run returns the raw tool output, such as `42` or `"foo"` or `{"foo": 42}`
 //
 // Tool Runner should wrap this in a [ReplyTool] or [ReplyToolOrError]
@@ -145,6 +181,13 @@ func (t Tool) Run(ctx context.Context, args any) (output any, err error) {
 			return nil, fmt.Errorf("invalid args type %T", args)
 		}
 		return fn(ctx, m)
+	case CallFuncV1C:
+		caller, ok := CtxCaller(ctx)
+		if !ok {
+			return nil, fmt.Errorf("no caller in ctx")
+		}
+		index, _ := CtxCallIndex(ctx)
+		return fn(ctx, caller, index) // TODO: multiple calls again
 	}
 	return nil, fmt.Errorf("no runner for sig %T", t.Exec)
 }

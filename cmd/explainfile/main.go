@@ -79,7 +79,7 @@ func main() {
 	}
 	convo = append(convo, caller.Message)
 
-	for _, js := range caller.Message.ToolCalls {
+	for index, js := range caller.Message.ToolCalls {
 		var call mllm.Call[struct {
 			Name string `json:"name"`
 		}]
@@ -88,7 +88,12 @@ func main() {
 			println("bad json call decode fatal", err.Error())
 			os.Exit(1)
 		}
-		toolout, err := toolbox.Run(ctx, call.Function.Name, call.Function.ArgsToMap())
+		ctx2 := ctx
+		// unnecessary in this example. some tool Exec funcs will require caller message
+		ctx2 = mllm.WithCaller(ctx2, caller.Message)
+		ctx2 = mllm.WithCall(ctx2, call)
+		ctx2 = mllm.WithCallIndex(ctx2, index)
+		toolout, err := toolbox.Run(ctx2, call.Function.Name, call.Function.ArgsToMap())
 		if err != nil {
 			println("fatal toolbox", call.Function.Name, err.Error())
 			os.Exit(1)
