@@ -4,9 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"runtime/debug"
+	"strconv"
+	"uuid"
 )
 
 // Tool has JSON spec and Exec func
@@ -20,19 +25,74 @@ type Spec = json.RawMessage
 
 type Tools []Tool
 
-func (tt Tools) ToJSON() []json.Marshaler {
-	a := make([]json.Marshaler, len(tt))
-	for i := range tt {
-		js, _ := WrapToolSpec(tt[i].Spec)
+// CallFuncV1 is completly optional. Any function signature may be used by a custom toolrunner.
+type (
+	CallFuncV1  = func(ctx context.Context, args map[string]any) (output any, err error)
+	CallFuncV1B = func(ctx context.Context, args json.RawMessage) (output any, err error)
+)
+
+// Flags useful but not necessary
+func Flags() {
+	flag.Float64Var(DefaultOptions.Temperature, "temperature", *DefaultOptions.Temperature, "temperature")
+	flag.StringVar(&DefaultModel, "model", DefaultModel, "model ONLY if no env var")
+	flag.StringVar(&DefaultHost, "host", DefaultHost, "host URL ONLY if no env var")
+	flag.Func("thread", "thread ID (if applicable)", func(s string) error {
+		var id uuid.UUID
+		if err := id.UnmarshalText([]byte(s)); err != nil {
+			return err
+		}
+		DefaultThread = id
+		return nil
+	})
+	flag.BoolFunc("v", "enable log", func(s string) error {
+		if s != "" {
+			x, _ := strconv.ParseBool(s)
+			if !x {
+				return nil
+			}
+		}
+		sl := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		}))
+		DefaultWriter = os.Stderr
+		Slog = func() *slog.Logger {
+			return sl
+		}
+		return nil
+	})
+	flag.BoolFunc("q", "disable log", func(s string) error {
+		if s != "" {
+			x, _ := strconv.ParseBool(s)
+			if !x {
+				return nil
+			}
+		}
+		sl := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelError,
+		}))
+		DefaultWriter = io.Discard
+		Slog = func() *slog.Logger {
+			return sl
+		}
+		return nil
+	})
+}
+
+// ToJSON ensures each tool is wrapped in a `"type": "function", "function":` wrapper.
+func (t Tools) ToJSON() []json.Marshaler {
+	a := make([]json.Marshaler, len(t))
+	for i := range t {
+		js, _ := WrapToolSpec(t[i].Spec)
 		a[i] = json.RawMessage(js)
 	}
 	return a
 }
 
-func (tt Tools) ByName(name string) Tool {
-	for i := range tt {
-		if tt[i].GetName() == name {
-			return tt[i]
+// ByName get a Tool
+func (t Tools) ByName(name string) Tool {
+	for i := range t {
+		if t[i].GetName() == name {
+			return t[i]
 		}
 	}
 	return Tool{}
@@ -41,12 +101,17 @@ func (tt Tools) ByName(name string) Tool {
 // Run returns the raw tool output, such as `42` or `"foo"` or `{"foo": 42}`
 //
 // Tool Runner should wrap this in a [ReplyTool] or [ReplyToolOrError]
-func (tt Tools) Run(ctx context.Context, name string, args any) (output any, err error) {
-	tool := tt.ByName(name)
+func (t Tools) Run(ctx context.Context, name string, args any) (output any, err error) {
+	tool := t.ByName(name)
 	if tool.Exec == nil {
 		return nil, fmt.Errorf("tool not found")
 	}
-	switch fn := tool.Exec.(type) {
+	return tool.Run(ctx, args)
+}
+
+// Run should be wrapped in a [ReplyTool] or [ReplyToolOrError]
+func (t Tool) Run(ctx context.Context, args any) (output any, err error) {
+	switch fn := t.Exec.(type) {
 	case CallFuncV1:
 		var m map[string]any
 		switch x := args.(type) {
@@ -57,6 +122,8 @@ func (tt Tools) Run(ctx context.Context, name string, args any) (output any, err
 			if err := json.Unmarshal(x, &m); err != nil {
 				return nil, fmt.Errorf("arg not object: %w", err)
 			}
+		case nil:
+			m = nil
 		default:
 			return nil, fmt.Errorf("invalid args type %T", args)
 		}
@@ -70,6 +137,8 @@ func (tt Tools) Run(ctx context.Context, name string, args any) (output any, err
 				return nil, err
 			}
 			m = js
+		case nil:
+			m = nil
 		case json.RawMessage:
 			m = x
 		default:
@@ -77,19 +146,17 @@ func (tt Tools) Run(ctx context.Context, name string, args any) (output any, err
 		}
 		return fn(ctx, m)
 	}
-	return nil, fmt.Errorf("no runner for sig %T", tool.Exec)
+	return nil, fmt.Errorf("no runner for sig %T", t.Exec)
 }
 
-// CallFuncV1 is completly optional and any may be used by a custom toolrunner
-type (
-	CallFuncV1  = func(ctx context.Context, args map[string]any) (output any, err error)
-	CallFuncV1B = func(ctx context.Context, args json.RawMessage) (output any, err error)
-)
-
+// GetName extracts the name for finding the matching tool for a [Call]
+//
+// Used by [Tools.ByName]
 func (t Tool) GetName() string {
 	var x Name
 	if err := json.Unmarshal(t.Spec, &x); err != nil {
 		slog.Error("GetName: json decode tool spec failed", "err", err)
+		return ""
 	}
 	name := x.GetName()
 	if name == "" {
@@ -98,13 +165,18 @@ func (t Tool) GetName() string {
 	return name
 }
 
+// Name finder (wrapped or unwrapped) in `"type":"function"`
+// Caller should access [Name.GetName] method
+//
+// Used by [Tool.GetName] and [Tools.ByName]
 type Name struct {
-	Name     string `json:"name,omitempty"` // "function" always?
-	Function struct {
+	Name     string   `json:"name,omitempty"`
+	Function struct { // if wrapped
 		Name string `json:"name,omitempty"`
 	} `json:"function"`
 }
 
+// GetName of [Tool] function [Spec] or [Call]
 func (n Name) GetName() string {
 	if n.Function.Name != "" {
 		return n.Function.Name
@@ -112,9 +184,8 @@ func (n Name) GetName() string {
 	return n.Name
 }
 
-type RawToolCall = Call[json.RawMessage]
-
-// Call is for a tool-runner to decode arguments. Callers may use Call[struct{Path string}] to decode `"arguments": {"path": "foo.txt"}`
+// Call is for a tool-runner to decode arguments.
+// Callers may use Call[struct{Path string}] to decode `"arguments": {"path": "foo.txt"}`
 //
 // It handles the case where Arguments json object is passed as a json string.
 //
@@ -130,6 +201,7 @@ type Function[T any] struct {
 	Arguments T      `json:"arguments,omitempty"`
 }
 
+// ToRaw converts back to a js arguments
 func (c Call[T]) ToRaw() Call[json.RawMessage] {
 	js, err := json.Marshal(c.Function.Arguments)
 	if err != nil {
@@ -148,6 +220,7 @@ func (c Call[T]) ToRaw() Call[json.RawMessage] {
 
 var ddebug = false
 
+// FromRaw attempts to decode from JSON
 func (c *Call[T]) FromRaw(js json.RawMessage) error {
 	if len(js) == 0 {
 		return nil
@@ -310,6 +383,9 @@ func ReplyTool[T any](call Call[T], val any) Message {
 	case error:
 		v = fmt.Sprintf("Tool returned error: %+v", x)
 	case string:
+		if x == "" {
+			x = "(the tool had no output)"
+		}
 		v = x
 	case json.RawMessage:
 		v = string(x)
@@ -320,7 +396,7 @@ func ReplyTool[T any](call Call[T], val any) Message {
 		if err == nil {
 			v = string(js)
 		} else { // TODO: non stringer non marshalable ...
-			Slog().Error("encoding tool output failed", "err", err)
+			Slog().Error("encoding tool output failed", "err", err, "typ", fmt.Sprintf("%T", val))
 			v = fmt.Sprint(val)
 		}
 	}

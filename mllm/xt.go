@@ -1,6 +1,7 @@
 package mllm
 
 import (
+	"slices"
 	"time"
 	"uuid"
 )
@@ -23,6 +24,13 @@ type ChatMessage struct {
 	From      string    `json:"from,omitempty" gorm:"default:null"`             // The name of user/bot who created this message
 	CreatedAt time.Time `json:"created_at"`                                     // Created or received at
 	Thread    uuid.UUID `json:"thread,omitempty" gorm:"type:uuid;default:null"` // Conversation thread this message belongs to
+
+	Aux any `json:"-" gorm:"-"` // unused by this package
+}
+
+func (m *ChatMessage) HandleChat(cr ChatResponse) error {
+	m.Message = m.Message.Add(cr.Message)
+	return nil
 }
 
 type ChatMessageWithID struct {
@@ -36,26 +44,69 @@ type ChatMessages []ChatMessage
 // ToChatMessage with DefaultThread, new MessageID, new timestamp.
 //
 // Should be called ONCE immediately after stream is finished.
-func (m Message) ToChatMessage(from string) ChatMessage {
+func (m Message) ToChatMessage(from string) *ChatMessage {
 	return NewChatMessage(m, from, DefaultThread)
 }
 
 // NewChatMessage from (see also [Message.ToChatMessage])
-func NewChatMessage(m Message, from string, thread uuid.UUID) ChatMessage {
-	m2 := ChatMessage{
+func NewChatMessage(m Message, from string, thread uuid.UUID) *ChatMessage {
+	m2 := &ChatMessage{
 		MessageID: uuid.New(),
 		Message:   m,
 		From:      from,
 		CreatedAt: time.Now().Truncate(time.Millisecond),
 		Thread:    thread,
+		Aux:       nil,
 	}
 	return m2
 }
 
-func (m Message) ToThreadMessage(from string, thread uuid.UUID) ChatMessage {
+func (m Message) ToThreadMessage(from string, thread uuid.UUID) *ChatMessage {
 	m2 := m.ToChatMessage(from)
 	m2.Thread = thread
 	return m2
+}
+
+func (m ChatMessage) Add(m2 ChatMessage) ChatMessage {
+	if m.MessageID == uuid.Nil() {
+		m.MessageID = m2.MessageID
+	}
+	m.Message = m.Message.Add(m2.Message)
+	if m.From == "" {
+		m.From = m2.From
+	}
+	if !m2.CreatedAt.IsZero() {
+		m.CreatedAt = m2.CreatedAt
+	}
+	if m.Thread == uuid.Nil() {
+		m.Thread = m2.Thread
+	}
+	if m2.Aux != nil {
+		m.Aux = m2.Aux
+	}
+	return m
+}
+
+func (cm ChatMessages) TopP() *ChatMessage {
+	l := len(cm)
+	if l == 0 {
+		return nil
+	}
+	return &cm[l-1]
+}
+
+func (cm ChatMessages) IndexOf(id uuid.UUID) int {
+	return slices.IndexFunc(cm, func(e ChatMessage) bool {
+		return e.MessageID == id
+	})
+}
+
+func (cm ChatMessages) ID(id uuid.UUID) *ChatMessage {
+	i := cm.IndexOf(id)
+	if i < 0 {
+		return nil
+	}
+	return &cm[i]
 }
 
 func (cm ChatMessages) Top() ChatMessage {

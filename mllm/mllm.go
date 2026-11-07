@@ -15,9 +15,12 @@ import (
 	"os"
 	"slices"
 	"time"
+	"uuid"
 
 	"github.com/aerth/mostly/stackerr"
 )
+
+type Client = E
 
 // E (Endpoint) holds information for future requests
 //
@@ -42,17 +45,18 @@ type E struct {
 
 	// Handlers **added** to all requests
 	Handlers []StreamHandler `json:"-"`
-}
 
-func (e E) Generate(ctx context.Context, sys string, usr string, think any) (Message, error) {
-	return e.GetMessage(ctx, Messages{
-		{Role: "system", Content: sys},
-		{Role: "user", Content: usr},
-	}, think)
+	//
+	From     string
+	ThreadID uuid.UUID
 }
 
 func ToMarshalers(v ...json.Marshaler) []json.Marshaler {
 	return v
+}
+
+func (t Tools) ToMarshalers() []json.Marshaler {
+	return t.ToJSON()
 }
 
 func _() {
@@ -123,7 +127,9 @@ var (
 		Temperature: new(1.0),
 		Seed:        -1,
 	}
-	ForcePath = false
+	DefaultModel string
+	DefaultHost  string
+	ForcePath    = false
 )
 
 var ToolWriter = toolWriter
@@ -167,11 +173,16 @@ func NewEndpoint(options *Options, tools []json.Marshaler) E {
 		Host: hostURL, Model: model, Client: http.DefaultClient, Options: options, Tools: tools,
 		StreamWriter: w1,
 		Headers:      hdr, Handlers: nil,
+		ThreadID: DefaultThread,
+		Writer:   DefaultWriter,
+		From:     DefaultFrom,
 	}
 }
 
 // DefaultWriter added to all new endpoints
 var DefaultWriter io.Writer = os.Stderr
+
+var DefaultFrom string
 
 // Default creates a new reusable LLM endpoint from env using [NewEndpoint] with no tools no options.
 var Default = func() E {
@@ -313,15 +324,15 @@ type Usage struct {
 // Message from [LMessage]
 type Message struct {
 	Role       string            `json:"role,omitempty"`
-	Content    string            `json:"content,omitempty"`
+	Content    string            `json:"content"`
 	Reasoning  string            `json:"thinking,omitempty" gorm:"default:null"`
 	ToolCalls  []json.RawMessage `json:"tool_calls,omitempty" gorm:"type:jsonb;serializer:json;default:null;"`
 	ToolName   string            `json:"tool_name,omitempty" gorm:"default:null"`
 	ToolCallID string            `json:"tool_call_id,omitempty" gorm:"default:null"`
 	Images     [][]byte          `json:"images,omitempty" gorm:"serializer:json;type:jsonb;default:null;"`
-	Message2   `gorm:"-"`
+	message2   `gorm:"-"`
 }
-type Message2 struct {
+type message2 struct {
 	// DO NOT USE
 	// ToolCalls2  *Call[json.RawMessage] `json:"tool_call,omitempty" gorm:"-"`         // Internal, DO NOT USE
 	ToolCallID2 string `json:"id,omitempty" gorm:"-"`                // Internal, DO NOT USE
@@ -389,8 +400,14 @@ func (m Message) Add(m2 Message) Message {
 	return m
 }
 
+// IsEmpty DOES NOT check m.Aux -- see also: [Message.IsBlank]
 func (m Message) IsEmpty() bool {
 	return m.Content == "" && m.Reasoning == "" && m.Role == "" && len(m.ToolCalls) == 0
+}
+
+// IsBlank DOES NOT check m.Aux or m.Role -- see also: [Message.IsEmpty]
+func (m Message) IsBlank() bool {
+	return m.Content == "" && m.Reasoning == "" && len(m.ToolCalls) == 0
 }
 
 func (m Message) Equal(m2 Message) bool {
@@ -492,6 +509,8 @@ func fflush(w io.Writer) {
 
 // Handler for [E.StreamBG] and [E.Stream]
 //
+// # SWAPS
+//
 // Is a [StreamHandler] to gather [Message]
 func (c *ChatResponse) Handler(in ChatResponse) error {
 	c.Done = in.Done
@@ -499,19 +518,9 @@ func (c *ChatResponse) Handler(in ChatResponse) error {
 	if in.Stats != (Stats{}) {
 		c.Stats = in.Stats
 	}
-	c.Message = c.Message.Add(in.Message)
+	msg := &c.Message
+	*msg = msg.Add(in.Message)
 	return nil
-}
-
-// StreamBG uses [E.Stream], closing ch after streaming is finished, sending non-nil error to the channel
-func (e E) StreamBG(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) chan error {
-	ch := make(chan error)
-	go func() {
-		err := e.Stream(ctx, messages, think, handlers...)
-		ch <- err // may be nil
-		close(ch)
-	}()
-	return ch
 }
 
 // NewRequest creates a [ChatRequest] adds e.Model, e.Tools, and e.Options
@@ -530,26 +539,6 @@ func (e E) NewRequest(messages []Message, think any) *ChatRequest {
 	return &reqBody
 }
 
-// Stream with handlers(only) or to [E.Writer], calls [E.Do]
-func (e E) Stream(ctx context.Context, messages []Message, think any, handlers ...StreamHandler) error {
-	if len(messages) == 0 {
-		return Errorf("%w", ErrNoConvo)
-	}
-	if e := e.ValidateConfig(think); e != nil {
-		return Errorf("%w", e)
-	}
-	creq := e.NewRequest(messages, think)
-	if creq == nil {
-		return Errorf("could not create request")
-	}
-	if e.PreRequest != nil {
-		if err := e.PreRequest(creq); err != nil {
-			return Errorf("%w", err)
-		}
-	}
-	return e.Do(ctx, *creq, handlers)
-}
-
 // Do sends a [ChatRequest] and streams response in [E.Read]
 func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) error {
 	if len(handlers) == 0 && e.StreamWriter.Writer != nil {
@@ -566,7 +555,7 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 		return Errorf("failed to marshal request: %w", err)
 	}
 	if creq.Options != nil && creq.Debug > 1 {
-		Slog().Info("sending body", "js", json.RawMessage(bodyBytes))
+		Slog().Info("sending body js: " + string(bodyBytes))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", e.Host.String(), bytes.NewBuffer(bodyBytes))
@@ -580,7 +569,11 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 	}
 
 	// send it
-	resp, err := e.Client.Do(req)
+	client := e.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return Errorf("request failed: %w", err)
 	}
@@ -594,7 +587,7 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 	var copybuf bytes.Buffer
 	reader := bufio.NewReader(io.TeeReader(resp.Body, &copybuf))
 
-	err = e.Read(reader, handlers...)
+	err = e.Read(ctx, reader, handlers...)
 	if err != nil {
 		if !Quiet {
 			if e.Options == nil || e.Options.Debug < 2 {
@@ -610,10 +603,15 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 
 type (
 	Calls[T any] []Call[T]
-	StringCalls  []Call[string]
+	StringCalls  []Call[string] // "arguments": "{"
 )
 
-// Combined fragments of tool calls into final calls (one per index) instead of bunch of fragments
+// Combined fragments of tool calls into final calls
+// (one per call index, which usually 1) instead of bunch of fragments
+//
+// Used in [E.Read] to finish a stream
+//
+// Should remove [Call] from this TODO:
 func (c StringCalls) Combined() Calls[string] {
 	var a StringCalls
 	for i := range c {
@@ -626,6 +624,7 @@ func (c StringCalls) Combined() Calls[string] {
 	return Calls[string](a)
 }
 
+// ToJSON used in [E.Read] to recombine to unparsed RawMessages
 func (c Calls[T]) ToJSON() []json.RawMessage {
 	if len(c) == 0 {
 		return nil
@@ -637,145 +636,153 @@ func (c Calls[T]) ToJSON() []json.RawMessage {
 	return a
 }
 
-// Read a stream, collecting for StreamHandlers
-func (e E) Read(reader *bufio.Reader, handlers ...StreamHandler) error {
-	lines := 0
-	var errs error
-	modeP1 := false
-	var currentCallIndex int
-	var currentCallID string
-	var callsparsed StringCalls
-	// stream
-	for {
+type minireader struct {
+	nlines      int
+	errors      []error
+	modeP1      bool
+	callsparsed StringCalls
+}
 
+func (m *minireader) ReadStreamFrame(line []byte, handlers []StreamHandler) error {
+	m.nlines++
+	trimmedLine := bytes.TrimSpace(line)
+	if len(trimmedLine) == 0 {
+		return nil
+	}
+	if post, ok := bytes.CutPrefix(trimmedLine, []byte("data: ")); ok {
+		trimmedLine = bytes.TrimSpace(post)
+		m.modeP1 = true
+	}
+
+	if len(trimmedLine) == 0 {
+		return nil
+	}
+	var chunk ChatResponse
+	if post, ok := bytes.CutPrefix(trimmedLine, []byte("[DONE]")); ok {
+		trimmedLine = bytes.TrimSpace(post)
+	}
+	if len(trimmedLine) == 0 {
+		return nil
+	}
+	//	println("GOT LINE", len(trimmedLine), string(trimmedLine))
+	if err := json.Unmarshal(trimmedLine, &chunk); err != nil { // chunk
+		Slog().Error("decode cr", "err", err, "chunk", string(trimmedLine))
+		return Errorf("Read: %w", err)
+	}
+	if chunk.DoneReason2 != "" {
+		chunk.Done = true
+		chunk.DoneReason = chunk.DoneReason2
+		chunk.DoneReason2 = ""
+	}
+	if chunk.Message.Reasoning2 != "" {
+		chunk.Message.Reasoning = chunk.Message.Reasoning2
+		chunk.Message.Reasoning2 = ""
+	}
+	if chunk.Message.Reasoning3 != "" {
+		chunk.Message.Reasoning = chunk.Message.Reasoning3
+		chunk.Message.Reasoning3 = ""
+	}
+	if x := chunk.Message.ToolCallID2; x != "" {
+		chunk.Message.ToolCallID = x
+		chunk.Message.ToolCallID2 = ""
+	}
+	for i := range chunk.Choices {
+		choice := &chunk.Choices[i]
+		if l := len(choice.Delta.ToolCalls); l != 0 {
+			if callsfound, err := chunkCollectCall(choice); err != nil {
+				return Errorf("Read.chunkCollectCall: %w", err)
+			} else if len(callsfound) != 0 {
+				m.callsparsed = append(m.callsparsed, callsfound...)
+				chunk.Message.ToolCalls = nil // yank from chunk/choice so StreamHandlers dont read partial tools
+				choice.Delta.ToolCalls = nil
+			}
+		}
+		if chunk.DoneReason2 != "" {
+			chunk.Done = true
+			chunk.DoneReason = chunk.DoneReason2
+			chunk.DoneReason2 = ""
+		}
+		if choice.Delta.Reasoning3 != "" {
+			choice.Delta.Reasoning = choice.Delta.Reasoning3
+		} else if choice.Delta.Reasoning2 != "" {
+			choice.Delta.Reasoning = choice.Delta.Reasoning2
+		}
+
+		choice.Delta.Reasoning2 = ""
+		if ptr := choice.FinishReason; ptr != nil {
+			chunk.Done = true
+			chunk.DoneReason = *ptr
+		}
+		if x := chunk.Message.ToolCallID2; x != "" {
+			panic("oops")
+		}
+		chunk.Message = chunk.Message.Add(choice.Delta)
+	}
+	chunk.Choices = nil
+	// keep emptiness if empty
+	if !chunk.Done && len(m.callsparsed) == 0 && chunk.Message.IsEmpty() {
+		Slog().Warn("empty message streamed, possible decode issue", "raw", string(trimmedLine))
+	} else if chunk.Message.Role == "" {
+		chunk.Message.Role = "assistant"
+	}
+	if chunk.Done {
+		// send tool calls in the last frame
+		chunk.Message.ToolCalls = m.callsparsed.Combined().ToJSON()
+	}
+	for i, handler := range handlers {
+		if err := handler(chunk); err != nil {
+			if StopAtFirstHandlerError {
+				return Errorf("%w", err)
+			}
+			m.errors = append(m.errors, Errorf("handler %d/%d: %w", i+1, len(handlers), err))
+		}
+	}
+	return nil
+}
+
+// Read a stream, collecting for StreamHandlers, stopping immediately at first error.
+//
+// Nothing is printed, only error is returned. At least one StreamHandler must be given.
+//
+// NOTE: To modify Read so that, after an error, **all** stream handlers are
+// given each frame, caller should set [StopAtFirstHandlerError] to false,
+func (e E) Read(ctx context.Context, reader *bufio.Reader, handlers ...StreamHandler) error {
+	if len(handlers) == 0 {
+		return Errorf("Read: no handlers")
+	}
+	var mini minireader
+	for {
+		if ctx.Err() != nil {
+			return context.Cause(ctx)
+		}
 		line, err := reader.ReadBytes('\n')
 		//println("LINE:", string(line))
 		isEOF := errors.Is(err, io.EOF)
-		if isEOF {
+		if isEOF && mini.nlines == 0 {
 			err = nil
 		}
 		if isEOF && len(line) == 0 {
 			break
 		}
-		lines++
 		if err != nil {
-			return fmt.Errorf("error reading stream: %w", err)
+			return fmt.Errorf("Read: error reading stream: %w", err)
 		}
-		trimmedLine := bytes.TrimSpace(line)
-		if len(trimmedLine) == 0 {
-			continue
+		if err := mini.ReadStreamFrame(line, handlers); err != nil {
+			return err
 		}
-		if post, ok := bytes.CutPrefix(trimmedLine, []byte("data: ")); ok {
-			trimmedLine = bytes.TrimSpace(post)
-			modeP1 = true
-		}
-
-		if len(trimmedLine) == 0 {
-			continue
-		}
-		var chunk ChatResponse
-		_ = modeP1 // TODO: use
-		if post, ok := bytes.CutPrefix(trimmedLine, []byte("[DONE]")); ok {
-			trimmedLine = bytes.TrimSpace(post)
-		}
-		if len(trimmedLine) == 0 {
-			continue
-		}
-		//	println("GOT LINE", len(trimmedLine), string(trimmedLine))
-		{
-			if err := json.Unmarshal(trimmedLine, &chunk); err != nil { // chunk
-				Slog().Error("decode cr", "err", err, "chunk", string(trimmedLine))
-				return Errorf("%w", err)
-			}
-			if chunk.DoneReason2 != "" {
-				chunk.Done = true
-				chunk.DoneReason = chunk.DoneReason2
-				chunk.DoneReason2 = ""
-			}
-			if chunk.Message.Reasoning2 != "" {
-				chunk.Message.Reasoning = chunk.Message.Reasoning2
-				chunk.Message.Reasoning2 = ""
-			}
-			if chunk.Message.Reasoning3 != "" {
-				chunk.Message.Reasoning = chunk.Message.Reasoning3
-				chunk.Message.Reasoning3 = ""
-			}
-			if x := chunk.Message.ToolCallID2; x != "" {
-				chunk.Message.ToolCallID = x
-				chunk.Message.ToolCallID2 = ""
-			}
-			_ = currentCallID
-			_ = currentCallIndex
-			for i := range chunk.Choices {
-				choice := &chunk.Choices[i]
-				if l := len(choice.Delta.ToolCalls); l != 0 {
-					if callsfound, err := chunkCollectCall(&chunk, choice); err != nil {
-						return Errorf("chunkCollectCall: %w", err)
-					} else if len(callsfound) != 0 {
-						callsparsed = append(callsparsed, callsfound...)
-						chunk.Message.ToolCalls = nil
-						choice.Delta.ToolCalls = nil
-					}
-				}
-				if chunk.DoneReason2 != "" {
-					chunk.Done = true
-					chunk.DoneReason = chunk.DoneReason2
-					chunk.DoneReason2 = ""
-				}
-				//	Slog().Info("handling delta", "d", chunk.Choices[i].Delta)
-
-				if choice.Delta.Reasoning3 != "" {
-					choice.Delta.Reasoning = choice.Delta.Reasoning3
-				} else if choice.Delta.Reasoning2 != "" {
-					choice.Delta.Reasoning = choice.Delta.Reasoning2
-				}
-
-				choice.Delta.Reasoning2 = ""
-				if ptr := choice.FinishReason; ptr != nil {
-					chunk.Done = true
-					chunk.DoneReason = *ptr
-				}
-				if x := chunk.Message.ToolCallID2; x != "" {
-					panic("oops")
-					//chunk.Message.ToolCallID = x
-					//chunk.Message.ToolCallID2 = ""
-				}
-				chunk.Message = chunk.Message.Add(choice.Delta)
-				//	Slog().Info("added delta", "c", chunk.Choices[i].Delta)
-				if !chunk.Done && chunk.Message.IsEmpty() {
-					//Slog().Info("handling delta", "d", chunk.Choices[i].Delta, "line", string(trimmedLine), "chunk", chunk)
-					continue
-				}
-			}
-			chunk.Choices = nil
-		}
-		if !chunk.Done && len(callsparsed) == 0 && chunk.Message.IsEmpty() {
-			Slog().Warn("possible decode issue", "from", string(trimmedLine))
-		} else if chunk.Message.Role == "" {
-			chunk.Message.Role = "assistant"
-		}
-		if chunk.Done {
-			chunk.Message.ToolCalls = callsparsed.Combined().ToJSON()
-		}
-		for i, handler := range handlers {
-			if err := handler(chunk); err != nil {
-				errs = errors.Join(errs, Errorf("handler %d/%d: %w", i+1, len(handlers), err))
-				if StopAtFirstHandlerError {
-					return Errorf("%w", errs)
-				}
-			}
-		}
+	} // stream loop
+	errs := mini.errors
+	lines := mini.nlines
+	if errs != nil {
+		return Errorf("%w", errs)
 	}
 	if lines == 0 {
 		return Errorf("%w", ErrNoLines)
 	}
-	if errs != nil {
-		return Errorf("%w", errs)
-	}
-	return errs
+	return nil
 }
 
-func chunkCollectCall(chatResponse *ChatResponse, choice *Choice) ([]Call[string], error) {
+func chunkCollectCall(choice *Choice) ([]Call[string], error) {
 	var a []Call[string]
 	for i := range choice.Delta.ToolCalls {
 		var x Call[string]
@@ -787,10 +794,20 @@ func chunkCollectCall(chatResponse *ChatResponse, choice *Choice) ([]Call[string
 	return a, nil
 }
 
-func (e E) ValidateConfig(think any) error {
+func (e *E) ValidateConfig(think any) error {
 	var errs error
 	if e.Model == "" {
+		e.Model = DefaultModel
+	}
+	if e.Model == "" {
 		errs = errors.Join(errs, fmt.Errorf("missing LLM_MODEL"))
+	}
+	if (e.Host.Scheme == "" || e.Host.Host == "") && DefaultHost != "" {
+		u, err := url.Parse(DefaultHost)
+		if err != nil {
+			return err
+		}
+		e.Host = *u
 	}
 	if e.Host.Scheme == "" || e.Host.Host == "" {
 		errs = errors.Join(errs, fmt.Errorf("missing LLM_HOST"))
@@ -804,44 +821,6 @@ func (e E) ValidateConfig(think any) error {
 		return Errorf("%w", errs)
 	}
 	return errs
-}
-
-func (e E) Chat(ctx context.Context, messages ChatMessages, think any) (ChatMessage, error) {
-	x, err := e.Get(ctx, messages.ToMessages(), think)
-	return x.Message.ToChatMessage(""), err
-}
-
-func (e E) GetMessage(ctx context.Context, messages []Message, think any) (Message, error) {
-	x, err := e.Get(ctx, messages, think)
-	return x.Message, err
-}
-
-// Get calls [E.Stream] and waits until finished, returning the full ChatResponse
-//
-// Uses [E.Stream], writes stream text to [[E.Writer]] if non-nil, returns full [ChatResponse]
-func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse, error) {
-	if e := e.ValidateConfig(think); e != nil {
-		return ChatResponse{}, Errorf("validate: %w", e)
-	}
-	//slog := Slog()
-	var chatResp ChatResponse
-	var handlers []StreamHandler
-	if e.StreamWriter.Writer != nil {
-		handlers = []StreamHandler{e.StreamWriter.New()}
-	} else if e.Writer != nil {
-		handlers = []StreamHandler{W1{e.Writer, DefaultThinkPre, DefaultThinkPost}.New()}
-	} else {
-		handlers = []StreamHandler{} // no printing
-	}
-	handlers = append(handlers, chatResp.Handler)
-	if len(e.Handlers) != 0 {
-		handlers = append(handlers, e.Handlers...)
-	}
-	err := e.Stream(ctx, messages, think, handlers...)
-	if err != nil {
-		return chatResp, Errorf("Stream: %w", err)
-	}
-	return chatResp, nil
 }
 
 // Summary in well-known format

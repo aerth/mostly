@@ -3,7 +3,6 @@ package mllm_test
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -17,7 +16,7 @@ import (
 type Tool = mllm.Tool
 
 func init() {
-	flag.Float64Var(mllm.DefaultOptions.Temperature, "temperature", *mllm.DefaultOptions.Temperature, "t")
+	mllm.Flags()
 }
 
 func TestRandom(t *testing.T) {

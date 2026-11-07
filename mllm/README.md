@@ -1,19 +1,47 @@
 # mllm
 
-tiny ai client
+tiny ai client package
+
+## About
+
+The `mllm` package is a lightweight, extensible LLM client library designed to simplify interactions with Large Language Models (LLMs) via providers such as llama.cpp or Ollama. It provides high-level abstractions for handling conversation messages, streaming responses (via a `StreamBG` method and configurable `StreamHandler` callbacks), and tool calling. The package simplifies environment-based configuration (Model, Host, API Key) and requires users to implement their own "tool runners" to execute logic based on the `Tool` specifications and `Call` arguments provided by the LLM.
 
 ## Environment Runtime Config
 
-
 Reads these env vars (in order):
 
-```
 Model: "MLLM_MODEL", "OLLAMA_MODEL", "LLM_MODEL"
 Host: "MLLM_HOST", "OLLAMA_HOST", "LLM_HOST"
 API Key (optional): "MLLM_API_KEY", "OLLAMA_API_KEY", "LLM_API_KEY"
+
+Use `DEBUG_LLM=1` to see JSON requests/responses
+
+Host may be a full URL. Otherwise, `/v1/chat/completions` is added.
+
+**Model and Host are required**.
+
+Flags may target `mllm.DefaultOptions` to override Temperature, etc.
+
+```go
+flag.Float64Var(mllm.DefaultOptions.Temperature,
+  "temperature", *mllm.DefaultOptions.Temperature, "temperature value for ai")
 ```
 
-Use `DEBUG_LLM=1` to see json requests/responses
+Programs may bypass the environment-based configuration by various means,
+such as replacing mllm.Default, or creating a mllm.Client manually.
+
+```go
+apiurl , _ := url.Parse("https://ollama.home.arpa/v1/chat/completions")
+client := mllm.E{
+  Host: *apiurl,
+  Model: "gemma4:12b",
+  Writer: os.Stdout,
+}
+_, err := client.Generate(context.TODO(), "", "Tell funny joke")
+if err != nil {
+  log.Fatalln(err)
+}
+```
 
 ## Provider
 
@@ -26,7 +54,7 @@ export LLM_MODEL=gemma-4-E2B-it-Q4_K_M LLM_HOST=http://127.0.0.1:9931/v1/chat/co
 Tested with ollama:
 
 ```bash
-export LLM_MODEL=gemma4:26b LLM_HOST=http://127.0.0.1:11434/v1/chat/completions
+export LLM_MODEL=gemma4:12b LLM_HOST=http://127.0.0.1:11434/v1/chat/completions
 ```
 
 ## Usage
@@ -37,22 +65,41 @@ Typical usage for TUI would be (background) streaming with a custom StreamHandle
 
 Use `StreamBG` to send the request, returning a `chan error` that is closed when stream is finished. A nil error is sent if no error occurred. The channel must be emptied.
 
-TUI/GUI applications may use StreamBG with custom handlers to stream the LLM output frames directly to a _view_ (possibly rendering markdown at intervals), and can access `cr.Done` to signal other threads that the generation is finished.
+TUI/GUI applications may use `StreamBG` with custom StreamHandler to stream the LLM output frames directly to a _view_ (possibly rendering markdown at intervals), and can access `cr.Done` to signal other threads that the generation is finished, to save and add the message to the "conversation".
 
 ```go
+// simple orchestration loop
+
  client := mllm.Default() // uses env for Model and Host
  think := false
+ e.Tools = mllm.Tools{searchTool,scrapeTool}
+
+// convo is list of mllm.Message which might look familiar:
+ convo := mllm.Messages{
+  {Role: "system", Content: "You are a ..."}, 
+  {Role: "user", Content: "what is the latest version of golang, and when will the next one be released?",
+ }}
+
  // ChatResponse itself has a Handler method that is a StreamHandler func
  var chatResp mllm.ChatResponse
  var handlers []StreamHandler // stream handlers are called each frame/delta
  handlers = []StreamHandler{
    mllm.NewHandlerOut(os.Stderr, "THINKING:\n", "\nFINISHED THINKING\n"),
    chatResp.Handler,
-   // your other handler
+   // your other handler for sending to View
  }
-
- err := <- e.StreamBG(ctx, messages, think, handlers...)
- // then, give chatResp to toolrunner, etc
+Chat:
+ err := <- e.StreamBG(ctx, convo, think, handlers...)
+ // add the "caller" to the conversation first
+ convo = append(convo, chatResp.Message)
+ // then, give "caller" to toolrunner, etc
+ if len(chatResp.Message.ToolCalls) != 0 {
+   // then, add toolout to convo
+   toolout := runTools(ctx, chatResp.Message)
+   convo = append(convo, toolout)
+   goto Chat // go back to the generate step
+ }
+ finalMessage := chatResp.Message
 ```
 
 See also: [test file](./mllm_test.go)
@@ -61,17 +108,23 @@ See also: [test file](./mllm_test.go)
 
 For non-streaming behavior, use `msg, err := client.Get(...)`
 
-_Under the hood, we still use `"stream": true`, but our `GetMessage` function itself does not return until the llm is finished (same with `Get` function)_
+_Under the hood, we still use `"stream": true`, but our `Generate`, `Get`, and `GetMessage` functions do not return until the llm is finished (same with `Get` function)_
 
 ```go
  client := mllm.Default() // uses env for Model and Host
+ client.Tools = nil // add tools to client
  think := false
  var resp mllm.Message
  var err error
+ // Get/GetMessage accepts convo and think as arguments.
  cr, err := client.Get(ctx, messages, think)
- resp = cr.Message // essentially the same as GetMessage
- // or:
+ resp = cr.Message 
+ // or, use GetMessage:
  resp, err = client.GetMessage(ctx, messages, think)
+
+ // or, for first or only message, Generate can be used 
+ // Generate accepts two string arguments (system, user):
+ resp, err = client.Generate(ctx, "You are a helpful assistant.", "Send golang official documentation links", think)
 }
 ```
 
@@ -140,9 +193,19 @@ Example `TimeTool` implemented in Go, using a `(ctx context.Context, args map[st
 The `"function":` wrapper is unnecessary as this package always ensures the spec is wrapped.
 
 ```go
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/aerth/mostly/mllm"
+)
+
 var TimeTool = mllm.Tool{
- Spec: timeSpec,
- Exec: getTime,
+	Spec: timeSpec,
+	Exec: getTime,
 }
 
 var timeSpec = json.RawMessage(`{
@@ -163,14 +226,14 @@ var timeSpec = json.RawMessage(`{
 }`)
 
 func getTime(ctx context.Context, args map[string]any) (string, error) {
- zone, ok := args["zone"].(string)
- if !ok {
-  return "", errors.New("invalid zone")
- }
- loc, err := time.LoadLocation(zone)
- if err != nil {
-  return "", fmt.Errorf("load location failed: %w", err)
- }
- return time.Now().In(loc).Format(time.RFC3339), nil
+	zone, ok := args["zone"].(string)
+	if !ok {
+		return "", errors.New("invalid zone")
+	}
+	loc, err := time.LoadLocation(zone)
+	if err != nil {
+		return "", fmt.Errorf("load location failed: %w", err)
+	}
+	return time.Now().In(loc).Format(time.RFC3339), nil
 }
 ```

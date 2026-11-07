@@ -20,10 +20,11 @@ import (
 // Apart from Path, all serve as fallback if not present in request/env.
 var EmbedOptions = struct {
 	URL        url.URL
-	Model      string // if req.Model is empty and env is empty
-	Dimensions int
-	EnvHost    string // the ENV_VAR to check to override [E.Host] (for when using 2 different hosts for llm,embeddings.)
-	Path       string // custom endpoint url path (default /api/embed)
+	Model      string            // if req.Model is empty and env is empty
+	Dimensions int               // must match [vector256.VarLen]
+	EnvHost    string            // the ENV_VAR to check to override [E.Host] (for when using 2 different hosts for llm,embeddings.)
+	Path       string            // custom endpoint url path (default /api/embed)
+	Headers    map[string]string // if different than LLM_API_KEY
 }{
 	Model:   "nomic-embed-text:v1.5",
 	EnvHost: "LLM_EMBED_HOST",
@@ -47,6 +48,7 @@ func (e E) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) 
 			}
 			EmbedOptions.URL = *u
 		}
+		envembedhost.Checked = true
 	}
 
 	if req.Model == "" {
@@ -72,7 +74,14 @@ func (e E) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) 
 	for k, v := range e.Headers {
 		request.Header.Set(k, v)
 	}
-	got, err := e.Client.Do(request)
+	for k, v := range EmbedOptions.Headers {
+		request.Header.Set(k, v)
+	}
+	client := e.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	got, err := client.Do(request)
 	if err != nil {
 		return nil, Errorf("%w", err)
 	}
@@ -92,10 +101,12 @@ func (e E) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) 
 
 		code := 42
 		msg := "error"
-		json.Unmarshal(resp.Error, &struct {
+		if err := json.Unmarshal(resp.Error, &struct {
 			Code    *int
 			Message *string
-		}{Code: &code, Message: &msg})
+		}{Code: &code, Message: &msg}); err != nil {
+			slog.Error(fmt.Sprintf("could not decode response error: %s", string(resp.Error)))
+		}
 		return resp, ErrorWithResponse{error: fmt.Errorf("%d: %s", code, msg), body: buf}
 	}
 	if len(resp.Data) != 0 && len(resp.Embeddings) == 0 {
@@ -158,6 +169,7 @@ type EmbedResponse struct {
 	Message json.RawMessage `json:"message,omitempty"`
 }
 
+// GetEmbeddings extracts the search embeddings vectors
 func (e *EmbedResponse) GetEmbeddings() vector256.Vector256 {
 	if e != nil && len(e.Data) != 0 {
 		return e.Data[0].Embedding
@@ -168,6 +180,9 @@ func (e *EmbedResponse) GetEmbeddings() vector256.Vector256 {
 	return e.Embeddings[0]
 }
 
+// DefaultEmbedOptions is added to the embed requests
+//
+// Untested
 var DefaultEmbedOptions map[string]any // nil
 
 // NewEmbed request
@@ -183,6 +198,7 @@ func NewEmbed(s string) EmbedRequest {
 	return reqBody
 }
 
+// L2normalize for llama.cpp to truncate dimensions
 func L2normalize[T float32 | float64](v []T) []T {
 	var sumSquares float64
 	for _, val := range v {
@@ -196,23 +212,6 @@ func L2normalize[T float32 | float64](v []T) []T {
 		v[i] = v[i] / norm
 	}
 	return v
-}
-
-func L2normalizeA[T float32 | float64](v []T) []T {
-	var sumSquares float64
-	for _, val := range v {
-		sumSquares += float64(val) * float64(val)
-	}
-	norm := T(math.Sqrt(sumSquares))
-	if norm == 0 {
-		return v
-	}
-
-	normalized := make([]T, len(v))
-	for i, val := range v {
-		normalized[i] = val / norm
-	}
-	return normalized
 }
 
 // NewNomicQuery adds `search_query: ` prefix to the given string
