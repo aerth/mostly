@@ -16,8 +16,6 @@ import (
 	"slices"
 	"time"
 	"uuid"
-
-	"github.com/aerth/mostly/stackerr"
 )
 
 type Client = E
@@ -122,19 +120,6 @@ func firstEnv(k []string) string {
 	return ""
 }
 
-var (
-	DefaultOptions = Options{
-		Temperature: new(1.0),
-		Seed:        -1,
-	}
-	DefaultModel      string
-	DefaultHost       string
-	DefaultHTTPClient *http.Client
-	ForcePath         = false
-)
-
-var ToolWriter = toolWriter
-
 // NewEndpoint reads env and returns a new reusable Endpoint
 //
 // See [E.StreamBG] or [E.Stream] or [E.Get]
@@ -179,25 +164,6 @@ func NewEndpoint(options *Options, tools []json.Marshaler) E {
 		From:     DefaultFrom,
 	}
 }
-
-// DefaultWriter added to all new endpoints
-var DefaultWriter io.Writer = os.Stderr
-
-var DefaultFrom string
-
-// Default creates a new reusable LLM endpoint from env using [NewEndpoint] with no tools no options.
-var Default = func() E {
-	e := NewEndpoint(nil, nil)
-	return e
-}
-
-var (
-	Errorf = stackerr.Errorf
-	Slog   = slog.Default
-)
-
-// NewE custom NewEndpoint
-var NewE = NewEndpoint
 
 func (e E) WithoutTools() E {
 	e.Tools = nil

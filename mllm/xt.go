@@ -6,11 +6,6 @@ import (
 	"uuid"
 )
 
-// DefaultThread for all [Message.ToChatMessage] calls.
-//
-// Applications may use this for chat rooms, conversations, etc
-var DefaultThread = uuid.Nil()
-
 // THIS FILE SUBJECT TO CHANGE
 
 // ChatMessage is a [Message] but with additional metadata (for a multi-participant conversation)

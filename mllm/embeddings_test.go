@@ -24,8 +24,8 @@ func compareFloat[T ~float32 | ~float64](x, y T) bool {
 func TestEmbed(t *testing.T) {
 	testEmbedClient = mllm.Default()
 	t.Run("normal", testEmbed1)
-	// t.Run("nomic-query", testEmbedNomicQuery)
-	// t.Run("nomic-document", testEmbedNomicDocument)
+	t.Run("nomic-query", testEmbedNomicQuery)
+	t.Run("nomic-document", testEmbedNomicDocument)
 }
 
 func testEmbed1(t *testing.T) {

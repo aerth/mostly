@@ -15,22 +15,6 @@ import (
 	"github.com/aerth/mostly/vector256"
 )
 
-// EmbedOptions application-wide global options
-//
-// Apart from Path, all serve as fallback if not present in request/env.
-var EmbedOptions = struct {
-	URL        url.URL
-	Model      string            // if req.Model is empty and env is empty
-	Dimensions int               // must match [vector256.VarLen]
-	EnvHost    string            // the ENV_VAR to check to override [E.Host] (for when using 2 different hosts for llm,embeddings.)
-	Path       string            // custom endpoint url path (default /api/embed)
-	Headers    map[string]string // if different than LLM_API_KEY
-}{
-	Model:   "nomic-embed-text:v1.5",
-	EnvHost: "LLM_EMBED_HOST",
-	Path:    "/v1/embeddings", // Path is to use same as [E.Host] but different path. NOT used if URL is set
-}
-
 var envembedhost = struct {
 	Checked bool
 	Value   url.URL
@@ -179,11 +163,6 @@ func (e *EmbedResponse) GetEmbeddings() vector256.Vector256 {
 	}
 	return e.Embeddings[0]
 }
-
-// DefaultEmbedOptions is added to the embed requests
-//
-// Untested
-var DefaultEmbedOptions map[string]any // nil
 
 // NewEmbed request
 func NewEmbed(s string) EmbedRequest {

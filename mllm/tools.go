@@ -4,14 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
-	"io"
 	"log/slog"
-	"os"
 	"runtime/debug"
-	"strconv"
-	"uuid"
 )
 
 // Tool has JSON spec and Exec func
@@ -31,53 +26,6 @@ type (
 	CallFuncV1B = func(ctx context.Context, args json.RawMessage) (output any, err error)
 	CallFuncV1C = func(ctx context.Context, m Message, index int) (output any, err error)
 )
-
-// Flags useful but not necessary
-func Flags() {
-	flag.Float64Var(DefaultOptions.Temperature, "temperature", *DefaultOptions.Temperature, "temperature")
-	flag.StringVar(&DefaultModel, "model", DefaultModel, "model ONLY if no env var")
-	flag.StringVar(&DefaultHost, "host", DefaultHost, "host URL ONLY if no env var")
-	flag.Func("thread", "thread ID (if applicable)", func(s string) error {
-		var id uuid.UUID
-		if err := id.UnmarshalText([]byte(s)); err != nil {
-			return err
-		}
-		DefaultThread = id
-		return nil
-	})
-	flag.BoolFunc("v", "enable log", func(s string) error {
-		if s != "" {
-			x, _ := strconv.ParseBool(s)
-			if !x {
-				return nil
-			}
-		}
-		sl := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		}))
-		DefaultWriter = os.Stderr
-		Slog = func() *slog.Logger {
-			return sl
-		}
-		return nil
-	})
-	flag.BoolFunc("q", "disable log", func(s string) error {
-		if s != "" {
-			x, _ := strconv.ParseBool(s)
-			if !x {
-				return nil
-			}
-		}
-		sl := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelError,
-		}))
-		DefaultWriter = io.Discard
-		Slog = func() *slog.Logger {
-			return sl
-		}
-		return nil
-	})
-}
 
 // ToJSON ensures each tool is wrapped in a `"type": "function", "function":` wrapper.
 func (t Tools) ToJSON() []json.Marshaler {
@@ -139,8 +87,8 @@ func CtxCall[T any](ctx context.Context) (Call[T], bool) {
 // Tool Runner should wrap this in a [ReplyTool] or [ReplyToolOrError]
 func (t Tools) Run(ctx context.Context, name string, args any) (output any, err error) {
 	tool := t.ByName(name)
-	if tool.Exec == nil {
-		return nil, fmt.Errorf("tool not found")
+	if tool.Exec == nil { // a non-exec tool should not be handled by Run
+		return nil, fmt.Errorf("tool %q not found", name)
 	}
 	return tool.Run(ctx, args)
 }
@@ -261,8 +209,6 @@ func (c Call[T]) ToRaw() Call[json.RawMessage] {
 	}
 }
 
-var ddebug = false
-
 // FromRaw attempts to decode from JSON
 func (c *Call[T]) FromRaw(js json.RawMessage) error {
 	if len(js) == 0 {
@@ -272,22 +218,15 @@ func (c *Call[T]) FromRaw(js json.RawMessage) error {
 	if _, ok := any(c.Function.Arguments).(string); ok {
 		isString = true
 		//	println("STRING")
-	} else {
-		println(fmt.Sprintf("%T NOT STRING", c.Function.Arguments))
+		//} else {
+		//	println(fmt.Sprintf("%T NOT STRING", c.Function.Arguments))
 	}
 	if !isString && js[0] != '{' {
-		if ddebug {
-			println("FromRaw given stringified object")
-		}
 		var v string
 		if err := json.Unmarshal(js, &v); err != nil {
 			return fmt.Errorf("unwrap stage 1: %w", err)
 		}
 		js = json.RawMessage(v)
-	} else {
-		if ddebug {
-			fmt.Printf("FromRaw given a object direct %T: %s\n", c.Function.Arguments, string(js))
-		}
 	}
 	err := json.Unmarshal(js, &c)
 	if err != nil {
