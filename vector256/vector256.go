@@ -15,13 +15,14 @@ type (
 	F         = float32 // F is for use instead of float32(x) or float64(x)
 )
 
-var BitSize = 32
+var BitSize = 32 // should match F
 
 // SearchEmbeddings helper embedded type (for 256 specific)
 type SearchEmbeddings struct {
 	Embeddings Vector256 `gorm:"type:vector(256);default:null" json:"-"`
 }
 
+// VarLen used to work with non-256 dimensions
 var VarLen = 256
 
 // Value converts the Go float32 slice into the '[0.1,0.2,...]' string format Postgres expects
@@ -39,7 +40,7 @@ func (v Vector256) Value() (driver.Value, error) {
 	// TODO: optimize
 	strVals := make([]string, len(v))
 	for i, val := range v {
-		strVals[i] = strconv.FormatFloat(float64(val), 'f', -1, 32)
+		strVals[i] = strconv.FormatFloat(float64(val), 'f', -1, BitSize)
 	}
 	return "[" + strings.Join(strVals, ",") + "]", nil
 }
@@ -57,7 +58,7 @@ func (v *Vector256) Scan(value any) error {
 	case []byte:
 		str = string(data)
 	default:
-		return fmt.Errorf("cannot scan type %T into Vector256", value)
+		return fmt.Errorf("cannot scan type %T into Vector256(%d)", value, VarLen)
 	}
 	str = strings.Trim(str, "[]")
 	if str == "" {
