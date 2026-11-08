@@ -127,9 +127,10 @@ var (
 		Temperature: new(1.0),
 		Seed:        -1,
 	}
-	DefaultModel string
-	DefaultHost  string
-	ForcePath    = false
+	DefaultModel      string
+	DefaultHost       string
+	DefaultHTTPClient *http.Client
+	ForcePath         = false
 )
 
 var ToolWriter = toolWriter
@@ -170,7 +171,7 @@ func NewEndpoint(options *Options, tools []json.Marshaler) E {
 		w1 = W1{Writer: DefaultWriter, ThinkPre: DefaultThinkPre, ThinkPost: DefaultThinkPost}
 	}
 	return E{
-		Host: hostURL, Model: model, Client: http.DefaultClient, Options: options, Tools: tools,
+		Host: hostURL, Model: model, Client: DefaultHTTPClient, Options: options, Tools: tools,
 		StreamWriter: w1,
 		Headers:      hdr, Handlers: nil,
 		ThreadID: DefaultThread,
