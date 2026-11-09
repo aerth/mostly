@@ -106,11 +106,14 @@ func Send(message string, priority Priority, vars map[string]string) error {
 	}
 
 	data := new(bytes.Buffer)
-	appendVariable(data, "PRIORITY", strconv.Itoa(int(priority)))
-	appendVariable(data, "MESSAGE", message)
+	appendVariable(data, "PRIORITY", strconv.Itoa(int(priority))) // allow priority to be overrided
+	for k, v := range Vars {
+		appendVariable(data, k, v)
+	}
 	for k, v := range vars {
 		appendVariable(data, k, v)
 	}
+	appendVariable(data, "MESSAGE", message) // message last so nothing can overwrite it
 
 	_, _, err := conn.WriteMsgUnix(data.Bytes(), nil, socketAddr)
 	if err == nil {
@@ -183,9 +186,11 @@ func validVarName(name string) error {
 	return nil
 }
 
-var ErrVarNameEmpty = errors.New("empty variable name")
-var ErrVarNameUnderscore = errors.New("variable name begins with an underscore")
-var ErrVarNameInvalid = errors.New("variable name contains invalid characters")
+var (
+	ErrVarNameEmpty      = errors.New("empty variable name")
+	ErrVarNameUnderscore = errors.New("variable name begins with an underscore")
+	ErrVarNameInvalid    = errors.New("variable name contains invalid characters")
+)
 
 // isSocketSpaceError checks whether the error is signaling
 // an "overlarge message" condition.

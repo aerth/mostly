@@ -5,7 +5,10 @@ import (
 	"os"
 )
 
-var _ io.Writer = (*JournalWriter)(nil) // compile-time interface check
+var (
+	_ io.Writer = (*JournalWriter)(nil) // compile-time interface check
+	_ io.Writer = (JournalWriter{})     // compile-time interface check
+)
 
 // JournalWriter writes to the systemd journal. If journal is not available, it falls back to FallbackWriter.
 // It's an io.Writer, and log.SetOutput() can be used to set it as the default logger.
@@ -21,6 +24,9 @@ var _ io.Writer = (*JournalWriter)(nil) // compile-time interface check
 type JournalWriter struct {
 	Priority // default 0 is 'Emergency' level
 }
+
+// Vars for all messages
+var Vars = map[string]string{}
 
 // FallbackWriter is used when writing to journal fails
 //
@@ -41,9 +47,9 @@ func (j JournalWriter) Write(b []byte) (int, error) {
 	if err != nil {
 		if FallbackWriter != nil {
 			if !DontLogErrors {
-				FallbackWriter.Write([]byte("journalwriter error: " + err.Error() + "\n"))
+				_, _ = FallbackWriter.Write([]byte("journalwriter error: " + err.Error() + "\n"))
 			}
-			FallbackWriter.Write(b) // fallback to stderr
+			_, _ = FallbackWriter.Write(b) // fallback to stderr
 		}
 		return 0, err
 	}
