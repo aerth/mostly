@@ -41,16 +41,16 @@ Cancellable Channel Context [superchan](./superchan/)
 
 [tiny ai client](https://github.com/aerth/mostly/tree/master/mllm) for llm and embeddings
 
-The `Default` function loads a new client from environment (`LLM_MODEL`, `LLM_HOST`, `LLM_API_KEY`)
-
-Works with llama.cpp and ollama, using `/v1/chat/completions` endpoint.
+Works with llama.cpp and ollama, using `/v1/chat/completions` endpoint. The `Default` function loads a new client from environment (`LLM_MODEL`, `LLM_HOST`, `LLM_API_KEY`)
 
 ```go
- import "github.com/aerth/mostlymllm"
-_, err := mllm.Default().Generate(ctx, "You are a story teller", "short story about an AI.", false)
- if err !+ nil {
-   println(err.Error())
- }
+func main() {
+	ctx := context.TODO()
+	_, err := mllm.Default().Generate(ctx, "[some system prompt]", "[some prompt]", false)
+	if err != nil {
+		println(err.Error())
+	}
+}
 ```
 
 ## httpserver
