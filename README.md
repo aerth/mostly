@@ -8,9 +8,21 @@ Use `stackerr.Errorf("%w", err)` everywhere, and then `log.Printf("%+v", err)` f
 
 When using `slog` package, the trace is simplified to a single-line.
 
+Use `%w` verb to wrap existing errors:
 ```go
-err := stackerr.Errorf("%w", io.EOF)
+return stackerr.Errorf("parsing file: %w", io.EOF)
+// elsewhere, print with slog or log:
 slog.Error("reading file", "err", err)
+log.Printf("reading file: %+v")
+println(fmt.Sprintf("%+v", err))
+```
+
+Use var to swap with `fmt.Errorf` making refactoring easy.
+```go
+var Errorf = stackerr.Errorf
+var Errorf = fmt.Errorf
+// elsewhere:
+return Errorf("%w", err)
 ```
 
 ## superchan
