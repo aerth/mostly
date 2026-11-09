@@ -16,27 +16,33 @@ import (
 	"strings"
 )
 
-var DebugJsonRequests = true
+var DebugJSONRequests = false
 
-// DecodeJsonReader does not close reader. set `DebugJsonRequests = true` for debug logging
-func DecodeJsonReader[T any](rdr io.Reader) (T, error) {
-	if DebugJsonRequests {
-		return debugDecodeJsonReader[T](rdr)
+// DecodeJSONReader does not close reader. set `DebugJSONRequests = true` for debug logging
+//
+// See [DecodeJSONReadCloser]
+func DecodeJSONReader[T any](rdr io.Reader) (T, error) {
+	if DebugJSONRequests {
+		return debugDecodeJSONReader[T](rdr)
 	}
 	var v T
 	err := json.NewDecoder(rdr).Decode(&v)
 	return v, err
+}
 
+func DecodeJSONReadCloser[T any](r io.ReadCloser) (T, error) {
+	defer func() { _ = r.Close() }()
+	return DecodeJSONReader[T](r)
 }
 
 // debug
-func debugDecodeJsonReader[T any](rdr io.Reader) (T, error) {
+func debugDecodeJSONReader[T any](rdr io.Reader) (T, error) {
 	var v T
 	buf, err := io.ReadAll(rdr)
 	if err != nil {
 		return v, err
 	}
-	var caller string
+	var caller strings.Builder
 	for i := 1; i <= 6; i++ {
 		_, file, num, ok := runtime.Caller(i)
 		if !ok {
@@ -46,10 +52,10 @@ func debugDecodeJsonReader[T any](rdr io.Reader) (T, error) {
 		if strings.HasPrefix(fname, "asm_") || strings.HasPrefix(fname, "xxxx") {
 			break
 		}
-		caller += fmt.Sprintf("%s:%d ", fname, num)
+		fmt.Fprintf(&caller, "%s:%d ", fname, num)
 	}
-	log.Println("debugjson:", caller)
-	os.Stderr.Write(buf)
-	os.Stderr.Write([]byte{'\n'})
+	log.Println("debugjson:", caller.String())
+	_, _ = os.Stderr.Write(buf)
+	_, _ = os.Stderr.Write([]byte{'\n'})
 	return v, json.Unmarshal(buf, &v)
 }

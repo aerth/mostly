@@ -3,6 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Directly copied from https://go.googlesource.com/exp/+/refs/heads/master/constraints/constraints.go
+// Ordered copied from "cmp" package
 
 // Package constraints defines a set of useful constraints to be used
 // with type parameters.
@@ -48,5 +49,15 @@ type Complex interface {
 // If future releases of Go add new ordered types,
 // this constraint will be modified to include them.
 type Ordered interface {
-	Integer | Float | ~string
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr |
+		~float32 | ~float64 |
+		~string
+}
+
+// OrderedNumber is Ordered without string
+type OrderedNumber interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr |
+		~float32 | ~float64
 }

@@ -10,34 +10,96 @@ import "errors"
 var ErrSkip = errors.New("skip error")
 
 // Twist strings into things, O(n)
-func Twist[T ~string](a []string) []T {
+func Twist[T ~string | ~[]byte](a []string) []T {
 	return TwistAny(a, func(k string) T {
 		return T(k)
 	})
 }
 
 // TwistBack things into strings, O(n)
-func TwistBack[T ~string](a []T) []string {
+func TwistBack[T ~string | ~[]byte](a []T) []string {
 	return TwistAny(a, func(k T) string {
 		return string(k)
 	})
 }
 
+// TwistParse2 strings into any things (with error handling)
+// skip elements (but continue indexes) by returning [ErrSkip] in fn function
+//
+// Example:
+//
+//	ncode.TwistParse2[url.URL]([]string{"google.com", "myspace.com"}, url.Parse2)
+//
+// TODO: skip without incrementing index
+func TwistParse2[T any, A any, B any](a []A, b B, fn2 func(a A, b B) (T, error)) ([]T, error) {
+	fn := func(a A) (T, error) {
+		return fn2(a, b)
+	}
+
+	return TwistAnyWithError(a, fn)
+}
+
+func TwistParse2Ptr[T any, A any, B any](a []A, b B, fn2 func(a A, b B) (*T, error)) ([]*T, error) {
+	fn := func(a A) (*T, error) {
+		return fn2(a, b)
+	}
+	return TwistAnyWithError(a, fn)
+}
+
 // TwistParse strings into any things (with error handling)
-// skip elements (but continue indexes) by returning ErrSkip in fn function
+// skip elements (but continue indexes) by returning [ErrSkip] in fn function
+//
+// Example:
+//
+//	ncode.TwistParse[url.URL]([]string{"google.com", "myspace.com"}, url.Parse)
+//
 // TODO: skip without incrementing index
 func TwistParse[T any](a []string, fn func(s string) (T, error)) ([]T, error) {
 	return TwistAnyWithError(a, fn)
 }
 
+func TwistParsePtr[T any](a []string, fn func(s string) (*T, error)) ([]*T, error) {
+	return TwistAnyWithError(a, fn)
+}
+
+type NCode[T any, K any] struct {
+	NonFatalErrors bool
+}
+
+func (n NCode[T, K]) TwistAnyWithError(a []K, fn func(s K) (T, error)) ([]T, error) {
+	if n.NonFatalErrors {
+		return TwistAnySkipError(a, fn)
+	}
+	return TwistAnyWithError(a, fn)
+}
+
+// TwistAnySkipError in case theres a parsing issue.
+// Errored are skipped and items will be zero-value in returned slice.
+//
+// Errors are collected
+func TwistAnySkipError[T any, K any](a []K, fn func(s K) (T, error)) ([]T, error) {
+	var errs error
+	k := make([]T, len(a))
+	for i := range a {
+		x, err := fn(a[i])
+		if err != nil {
+			errs = errors.Join(errs, err)
+			continue
+		}
+		k[i] = x
+	}
+	return k, errs
+}
+
 // TwistAnyWithError in case theres a parsing issue.
 // skip elements (but continue indexes) by returning ErrSkip in fn function
-// TODO: skip without incrementing index
+//
+// Skipped items will be zero-value in returned slice.
 func TwistAnyWithError[T any, K any](a []K, fn func(s K) (T, error)) ([]T, error) {
 	k := make([]T, len(a))
 	for i := range a {
 		x, err := fn(a[i])
-		if err == ErrSkip {
+		if errors.Is(err, ErrSkip) {
 			continue
 		}
 		if err != nil {

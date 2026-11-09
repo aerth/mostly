@@ -3,6 +3,7 @@
 // The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 // THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+// Package ncode for twist
 package ncode
 
 import (
@@ -13,18 +14,23 @@ import (
 	"github.com/aerth/mostly/ncode/constraints"
 )
 
-var Binary = binary.LittleEndian
-var Json = toJson
+var (
+	Binary = binary.LittleEndian
+	JSON   = toJSON
+)
 
-// eg: ncode.Json = ncode.JsonIndent
-func JsonIndent(a any) []byte {
+// JSONIndent ...
+// eg: ncode.JSON = ncode.JSONIndent
+func JSONIndent(a any) []byte {
 	b, _ := json.MarshalIndent(a, "", " ")
 	return b
 }
-func JsonString(a any) string {
-	return string(toJson(a))
+
+func JSONString(a any) string {
+	return string(toJSON(a))
 }
-func toJson(a any) []byte {
+
+func toJSON(a any) []byte {
 	b, _ := json.Marshal(a)
 	return b
 }
@@ -32,7 +38,7 @@ func toJson(a any) []byte {
 // ErrZeroLength 404 not found
 var ErrZeroLength = fmt.Errorf("cannot decode zero length")
 
-func DecodeJson[T any](b []byte) (T, error) {
+func DecodeJSON[T any](b []byte) (T, error) {
 	var v T
 	if len(b) == 0 {
 		return v, ErrZeroLength
@@ -43,7 +49,7 @@ func DecodeJson[T any](b []byte) (T, error) {
 
 // N2B Number to []byte
 func N2B[E constraints.Unsigned](n E) []byte {
-	var buf = make([]byte, 8)
+	buf := make([]byte, 8)
 	Binary.PutUint64(buf, uint64(n))
 	return buf
 }

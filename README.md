@@ -6,6 +6,11 @@ Use `stackerr.Errorf("%w", err)` everywhere, and then `log.Printf("%+v", err)` f
 
 When using `slog` package, the trace is simplified to a single-line.
 
+```go
+err := stackerr.Errorf("%w", io.EOF)
+slog.Error("reading file", "err", err)
+```
+
 ## superchan
 
 Cancellable Channel Context [superchan](./superchan/)
@@ -21,11 +26,25 @@ Cancellable Channel Context [superchan](./superchan/)
 
 [encoding](./ncode/), twist arrays (`[]string -> []MyString -> []string`)
 
-## anydb
+```go
+	// example, turn strings to *url.URL
+	var urls []*url.URL
+	var err error
+	urls, err = ncode.TwistParsePtr([]string{"https://google.com", "https://myspace.com"}, url.Parse)
 
-store/fetch bbolt.DB helpers for nested buckets (path as `[][]byte` or `[]string`)
+	var envs []string
+	envs, err = ncode.TwistParse([]string{"XDG_CONFIG_HOME", "HOME"}, os.Getenv)
+	
+```
 
-_(anydb was removed to keep go.mod empty)_
+## mllm
+
+[tiny ai client](https://github.com/aerth/mostly/tree/master/mllm) for llm and embeddings
+
+```go
+ import "github.com/aerth/mostlymllm"
+_, err := mllm.Default().Generate(ctx, "", "Write a short story about dragons.", false)
+```
 
 ## httpserver
 
@@ -33,7 +52,14 @@ a cancellable, signal handling, httpserver+context combo for all kinds of web se
 
 ## flagpkg
 
-for InverseBoolVar (eg: `--no-foo` to set foo to false)
+`InverseBoolVar` (eg: `--no-foo` to set foo to false)
+
+```go
+	import "github.com/aerth/mostly/flagpkg"
+	// example:
+	cfg.ComplatePage = true
+	flagpkg.InverseBoolVar(&cfg.CompletePage, "no-complete", cfg.CompletePage, "dont make whole html page")
+```
 
 ## filters
 

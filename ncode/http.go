@@ -5,10 +5,11 @@
 
 package ncode
 
-import "net/http"
+import (
+	"net/http"
+)
 
 // DecodeRequestBody (and close body)
 func DecodeRequestBody[T any](w http.ResponseWriter, r *http.Request) (T, error) {
-	defer r.Body.Close()
-	return DecodeJsonReader[T](r.Body)
+	return DecodeJSONReadCloser[T](r.Body)
 }

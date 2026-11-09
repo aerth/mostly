@@ -6,6 +6,7 @@
 package ncode
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/aerth/mostly/ncode/constraints"
@@ -19,5 +20,11 @@ func ParseNumber[T constraints.Unsigned](in string) (T, error) {
 // ParseBase string->~uint
 func ParseBase[T constraints.Unsigned](in string, base int) (T, error) {
 	n, err := strconv.ParseUint(in, base, 64)
+	x := T(n)
+	if uint64(x) != n {
+		return x, ErrOverflow
+	}
 	return T(n), err
 }
+
+var ErrOverflow = errors.New("overflow, possible incorrect data type")
