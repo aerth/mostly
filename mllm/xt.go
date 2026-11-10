@@ -36,6 +36,14 @@ type ChatMessageWithID struct {
 // ChatMessages like [Messages] but with additional metadata (multiple multi-participant conversations)
 type ChatMessages []ChatMessage
 
+func (cm ChatMessages) Roles() []string {
+	roles := make([]string, len(cm))
+	for i := range cm {
+		roles[i] = cm[i].Role // might be empty if cm[i].Aux, caller can remove
+	}
+	return roles
+}
+
 // ToChatMessage with DefaultThread, new MessageID, new timestamp.
 //
 // Should be called ONCE immediately after stream is finished.
