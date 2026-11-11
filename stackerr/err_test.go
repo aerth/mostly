@@ -16,11 +16,11 @@ import (
 // NOTE: these tests have line numbers
 // [reserved line]
 // NOTE: use utils_test.go so this file's imports change less frequently
-var linestart = 2 // should stay 0 but is nice
+var linestart = 0 // should stay 0 but is nice
 
 func TestError(t *testing.T) {
 	err := stackerr.Wrap(io.EOF) // prevline
-	prevline := 20 + linestart
+	prevline := 22 + linestart
 	got := fmt.Sprintf("%+v", err)
 	logg.Printf("got: %s", got)
 	if got != "EOF\n\tfrom stackerr_test.TestError (err_test.go:"+fmt.Sprint(prevline)+")" {
@@ -34,7 +34,7 @@ func TestError2a(t *testing.T) {
 	if !errors.Is(err, io.EOF) {
 		t.Fatal("wanted Is")
 	}
-	prevline := 31 + linestart
+	prevline := 33 + linestart
 	got := fmt.Sprintf("%+v", err)
 	logg.Printf("got: %s", got)
 	want := "EOF\n\tfrom stackerr_test.TestError2a (err_test.go:" + fmt.Sprint(prevline) + ")" +
@@ -50,7 +50,7 @@ func TestError2(t *testing.T) {
 	if !errors.Is(err, io.EOF) {
 		t.Fatal("wanted Is")
 	}
-	prevline := 47 + linestart
+	prevline := 49 + linestart
 	got := fmt.Sprintf("%+v", err)
 	logg.Printf("got: %s", got)
 	want := "EOF\n\tfrom stackerr_test.TestError2 (err_test.go:" + fmt.Sprint(prevline) + ")" +
@@ -66,7 +66,7 @@ func TestJson(t *testing.T) {
 	if !errors.Is(err, io.EOF) {
 		t.Fatal("wanted Is")
 	}
-	prevline := 64 + linestart
+	prevline := 65 + linestart
 	_ = prevline
 	js := jsonMarshal(err)
 	logg.Println(string(js))
