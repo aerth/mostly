@@ -107,7 +107,7 @@ func Flags() {
 		DefaultThread = id
 		return nil
 	})
-	if NoLogFlags {
+	if !NoLogFlags {
 		flag.BoolFunc("v", "enable log", func(s string) error {
 			if s != "" {
 				x, _ := strconv.ParseBool(s)
