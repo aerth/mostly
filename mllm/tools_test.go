@@ -20,11 +20,8 @@ func init() {
 }
 
 func TestRandom(t *testing.T) {
-	println(1)
 	client := mllm.Default()
 	ctx := t.Context()
-
-	println(2)
 	l := 3
 	for i := range l {
 		println("Part", i+1)

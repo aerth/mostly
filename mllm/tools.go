@@ -28,6 +28,8 @@ type (
 )
 
 // ToJSON ensures each tool is wrapped in a `"type": "function", "function":` wrapper.
+//
+// see [Tool.MarshalJSON]
 func (t Tools) ToJSON() []json.Marshaler {
 	a := make([]json.Marshaler, len(t))
 	for i := range t {
@@ -53,6 +55,7 @@ const (
 	ctxkeyCaller    = ctxkey("caller")
 	ctxkeyCall      = ctxkey("call")
 	ctxkeyCallIndex = ctxkey("call-index")
+	ctxkeyClient    = ctxkey("client")
 )
 
 func WithCaller(ctx context.Context, caller Message) context.Context {
@@ -67,6 +70,10 @@ func WithCallIndex(ctx context.Context, index int) context.Context {
 	return context.WithValue(ctx, ctxkeyCall, index)
 }
 
+func WithClient(ctx context.Context, client E) context.Context {
+	return context.WithValue(ctx, ctxkeyClient, client)
+}
+
 func CtxCaller(ctx context.Context) (Message, bool) {
 	x, ok := ctx.Value(ctxkeyCaller).(Message)
 	return x, ok
@@ -79,6 +86,11 @@ func CtxCallIndex(ctx context.Context) (int, bool) {
 
 func CtxCall[T any](ctx context.Context) (Call[T], bool) {
 	x, ok := ctx.Value(ctxkeyCaller).(Call[T])
+	return x, ok
+}
+
+func CtxClient(ctx context.Context) (E, bool) {
+	x, ok := ctx.Value(ctxkeyClient).(E)
 	return x, ok
 }
 
@@ -283,6 +295,9 @@ func (c *Call[T]) FromPlain(from Call[json.RawMessage]) error {
 }
 
 func WrapToolSpec(js json.RawMessage) ([]byte, error) {
+	if len(js) < 5 {
+		return nil, nil
+	}
 	if isWrapped(js) {
 		return json.Marshal(js)
 	}
