@@ -5,7 +5,9 @@
 
 package ncode
 
-import "errors"
+import (
+	"errors"
+)
 
 var ErrSkip = errors.New("skip error")
 
@@ -64,13 +66,18 @@ func TwistParsePtr[T any](a []string, fn func(s string) (*T, error)) ([]*T, erro
 
 type NCode[T any, K any] struct {
 	NonFatalErrors bool
+	Fn             func(s K) (T, error)
 }
 
-func (n NCode[T, K]) TwistAnyWithError(a []K, fn func(s K) (T, error)) ([]T, error) {
+func Twister[T any, V any](fn func(s V) (T, error)) NCode[T, V] {
+	return NCode[T, V]{Fn: fn}
+}
+
+func (n NCode[T, K]) Twist(a []K) ([]T, error) {
 	if n.NonFatalErrors {
-		return TwistAnySkipError(a, fn)
+		return TwistAnySkipError(a, n.Fn)
 	}
-	return TwistAnyWithError(a, fn)
+	return TwistAnyWithError(a, n.Fn)
 }
 
 // TwistAnySkipError in case theres a parsing issue.
@@ -122,4 +129,13 @@ func TwistAny[T any, K any](a []T, fn func(v T) K) []K {
 		k[i] = fn(a[i])
 	}
 	return k
+}
+
+var (
+	S2B = VarList[string, []string]
+	ANY = VarList[any, []any]
+)
+
+func VarList[T any, A ~[]T](a ...T) A {
+	return a
 }

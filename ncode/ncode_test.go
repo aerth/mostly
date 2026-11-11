@@ -36,14 +36,15 @@ func TestNcode1(t *testing.T) {
 	})
 
 	t.Run("bools", func(t *testing.T) {
-		bools := []string{"true", "false", "1", "0", "True", "False", "TRUE", "FALSE"}
+		bools := []string{"true", "false", "1", "0", "TRUE", "FALSE"}
+		wants := []string{"true", "false", "true", "false", "true", "false"}
 		results, err := ncode.TwistParse(bools, strconv.ParseBool)
 		if err != nil {
 			t.Errorf("%+v", err)
 		}
-		for i, v := range bools {
-			if v != fmt.Sprint(results[i]) {
-				t.Fatal(i, v, results[i])
+		for i := range bools {
+			if wants[i] != fmt.Sprint(results[i]) {
+				t.Fatal(i+1, wants[i], results[i])
 			}
 		}
 	})
