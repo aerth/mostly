@@ -443,7 +443,7 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 			}
 			if len(calls) != 0 && ToolWriter != nil {
 				for i := range calls {
-					_ = ToolWriter(w, calls[i])
+					_ = ToolWriter(ToolWriterOut, calls[i])
 				}
 			} else if wrote { // toolwriter should print new line
 				_, _ = fmt.Fprint(w, "\n")
@@ -461,6 +461,8 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 		return nil
 	}
 }
+
+var ToolWriterOut io.Writer = os.Stderr
 
 func toolWriter(w io.Writer, rawMessage json.RawMessage) (err error) {
 	return json.NewEncoder(w).Encode(map[string]any{"mllm_tool_call": rawMessage})
