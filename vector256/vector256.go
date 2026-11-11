@@ -11,7 +11,7 @@ import (
 
 // Vector256 represents a 256-dimensional float32 vector for pgvector and may be zero-length or a slice of 256 float32
 type (
-	Vector256 []F
+	Vector256 []F       // []float32, length enforced at [Vector256.Value] and [Vector256.Scan], must be [VarLen] and [BitSize]
 	F         = float32 // F is for use instead of float32(x) or float64(x)
 )
 
