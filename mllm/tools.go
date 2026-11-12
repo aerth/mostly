@@ -399,3 +399,15 @@ func ReplyTool[T any](call Call[T], val any) Message {
 	}
 	return Message{Role: "tool", ToolCallID: callID, ToolName: toolname, Content: v}
 }
+
+func ToolNames(tools Tools) []string {
+	names := make([]string, len(tools))
+	for i := range tools {
+		names[i] = tools[i].GetName()
+	}
+	return names
+}
+
+func (t Tools) Names() []string {
+	return ToolNames(t)
+}
