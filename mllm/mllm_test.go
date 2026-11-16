@@ -12,10 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aerth/mostly/godotenv"
 	"github.com/aerth/mostly/mllm"
 )
 
 func TestMain(t *testing.M) {
+	_ = godotenv.Load("../.env")
 	slog.SetDefault(slog.New(
 		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{AddSource: true, ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			if a.Key == slog.SourceKey {
