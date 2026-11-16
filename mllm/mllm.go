@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strings"
 	"time"
 	"uuid"
 )
@@ -61,6 +62,8 @@ func _() {
 	println("OK")
 	ToMarshalers(json.RawMessage(""))
 }
+
+var nolamma = true
 
 type (
 	W  interface{ New() StreamHandler }
@@ -141,7 +144,7 @@ func NewEndpoint(options *Options, tools []json.Marshaler) E {
 				hostURL.Path = "/v1/chat/completions"
 			}
 		} else {
-			Slog().Error("parsing url failed, check env: " + EnvModel[0]) // dont print err
+			Slog().Error("parsing url failed, check env: " + EnvHost[0]) // dont print err
 		}
 	}
 	var hdr map[string]string
@@ -291,14 +294,53 @@ type Usage struct {
 // Message from [LMessage]
 type Message struct {
 	Role       string            `json:"role,omitempty"`
-	Content    string            `json:"content"`
 	Reasoning  string            `json:"thinking,omitempty" gorm:"default:null"`
 	ToolCalls  []json.RawMessage `json:"tool_calls,omitempty" gorm:"type:jsonb;serializer:json;default:null;"`
 	ToolName   string            `json:"tool_name,omitempty" gorm:"default:null"`
 	ToolCallID string            `json:"tool_call_id,omitempty" gorm:"default:null"`
-	Images     [][]byte          `json:"images,omitempty" gorm:"serializer:json;type:jsonb;default:null;"`
+	Content    string            `json:"content"`
+	Images     [][]byte          `json:"-" gorm:"-"` // gorm:"serializer:json;type:jsonb;default:null;"`
 	message2   `gorm:"-"`
 }
+
+func (m Message) MarshalJSON() ([]byte, error) {
+	type alias Message
+	if len(m.Images) == 0 {
+		return json.Marshal(alias(m))
+	}
+	type imagemessage struct {
+		Role    string           `json:"role,omitempty"`
+		Content []map[string]any `json:"content"`
+	}
+
+	m2 := imagemessage{
+		Role:    m.Role,
+		Content: []map[string]any{{"type": "text", "text": m.Content}},
+	}
+	for i := range m.Images {
+		typ := http.DetectContentType(m.Images[i])
+		if typ == "application/octet-stream" {
+			return nil, fmt.Errorf("could not detect image type")
+		}
+		slog.Info("image type", "k", typ)
+		jb64, err := json.Marshal(m.Images[i])
+		if err != nil {
+			return nil, err
+		}
+		jb64 = jb64[1 : len(jb64)-1] // unquote
+		m2.Content = append(m2.Content, map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": fmt.Sprintf("data:%s;base64,%s", typ, string(jb64))},
+		})
+
+		if !strings.HasPrefix(string(jb64), "iVBOR") {
+			slog.Error("jb64", "x", string(jb64))
+			return nil, fmt.Errorf("not good")
+		}
+	}
+	return json.Marshal(m2)
+}
+
 type message2 struct {
 	// DO NOT USE
 	// ToolCalls2  *Call[json.RawMessage] `json:"tool_call,omitempty" gorm:"-"`         // Internal, DO NOT USE
@@ -618,6 +660,9 @@ func (m *minireader) ReadStreamFrame(line []byte, handlers []StreamHandler) erro
 	if len(trimmedLine) == 0 {
 		return nil
 	}
+	if len(trimmedLine) == 1 && trimmedLine[0] == ':' {
+		return nil
+	}
 	if post, ok := bytes.CutPrefix(trimmedLine, []byte("data: ")); ok {
 		trimmedLine = bytes.TrimSpace(post)
 		m.modeP1 = true
@@ -734,10 +779,10 @@ func (e E) Read(ctx context.Context, reader *bufio.Reader, handlers ...StreamHan
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("Read: error reading stream: %w", err)
+			return Errorf("Read: error reading stream: %w", err)
 		}
 		if err := mini.ReadStreamFrame(line, handlers); err != nil {
-			return err
+			return Errorf("%w", err)
 		}
 	} // stream loop
 	errs := mini.errors
