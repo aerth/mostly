@@ -11,9 +11,10 @@ import (
 )
 
 func TestVision(t *testing.T) {
+	_ = getTestImage(t)
 	client := mllm.Default()
 	ctx := t.Context()
-	img, err := os.ReadFile("../screenshot.png")
+	img, err := os.ReadFile("tmp/placeholder.png")
 	if err != nil {
 		t.Skip(err.Error())
 		return
