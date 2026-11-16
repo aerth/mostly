@@ -5,15 +5,18 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"slices"
+	"strings"
 	"time"
 	"uuid"
 )
@@ -300,6 +303,71 @@ type Message struct {
 	Content    string            `json:"content"`
 	Images     [][]byte          `json:"-" gorm:"-"` // gorm:"serializer:json;type:jsonb;default:null;"`
 	message2   `gorm:"-"`
+}
+
+func (m *Message) UnmarshalJSON(b []byte) error {
+	{ // default try content as string
+		type alias Message
+		var al alias
+		err := json.Unmarshal(b, &al)
+		if err == nil {
+			*m = Message(al)
+			return nil
+		}
+	}
+
+	// get content as []map, rare but we need to be able to unmarshal image message
+	type alias struct {
+		Content    []map[string]any  `json:"content"`
+		Role       string            `json:"role,omitempty"`
+		Reasoning  string            `json:"thinking,omitempty" gorm:"default:null"`
+		ToolCalls  []json.RawMessage `json:"tool_calls,omitempty" gorm:"type:jsonb;serializer:json;default:null;"`
+		ToolName   string            `json:"tool_name,omitempty" gorm:"default:null"`
+		ToolCallID string            `json:"tool_call_id,omitempty" gorm:"default:null"`
+		Images     [][]byte          `json:"-" gorm:"-"` // gorm:"serializer:json;type:jsonb;default:null;"`
+		message2   `gorm:"-"`
+	}
+	var al alias
+	err := json.Unmarshal(b, &al)
+	if err != nil {
+		return err
+	}
+	content := ""
+	for _, v := range al.Content {
+		slog.Info("got keys", "keys", slices.Collect(maps.Keys(v)))
+		if v["type"] == "text" {
+			content, _ = v["text"].(string)
+		}
+		if v["type"] == "image_url" {
+			b64, ok := v["image_url"].(map[string]any)
+			if !ok {
+				slog.Warn("v is", "T", fmt.Sprintf("%T", v["image_url"]))
+			}
+			//slog.Info("got inner keys", "keys", slices.Collect(maps.Keys(b64)))
+			if len(b64) != 0 {
+				u, ok := b64["url"].(string)
+				if !ok {
+					slog.Warn("v is", "T", fmt.Sprintf("%T", b64["url"]))
+				}
+				_, post, ok := strings.Cut(u, "base64,")
+				//			println(post)
+				if ok {
+					b, err := base64.StdEncoding.DecodeString(post)
+					if err != nil {
+						return Errorf("%w", err)
+					}
+					al.Images = append(al.Images, b) // TODO more than one
+				}
+			}
+		}
+	}
+	*m = Message{
+		Role:      al.Role,
+		Reasoning: al.Reasoning,
+		Content:   content,
+		Images:    al.Images,
+	}
+	return nil
 }
 
 func (m Message) MarshalJSON() ([]byte, error) {
