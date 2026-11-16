@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"slices"
-	"strings"
 	"time"
 	"uuid"
 )
@@ -332,11 +331,6 @@ func (m Message) MarshalJSON() ([]byte, error) {
 			"type":      "image_url",
 			"image_url": map[string]any{"url": fmt.Sprintf("data:%s;base64,%s", typ, string(jb64))},
 		})
-
-		if !strings.HasPrefix(string(jb64), "iVBOR") {
-			slog.Error("jb64", "x", string(jb64))
-			return nil, fmt.Errorf("not good")
-		}
 	}
 	return json.Marshal(m2)
 }
