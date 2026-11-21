@@ -260,8 +260,7 @@ type Options struct {
 //	err := <-mllm.Default().StreamBG(ctx, mllm.Messages{{Role: "user", Content: "hi"}}, false, cr.Handler)
 //	println("Bot:", cr.Message.Content)
 type ChatResponse struct {
-	LLMID string `json:"id,omitempty" gorm:"-"`
-	//	Object string
+	LLMID       string          `json:"id,omitempty" gorm:"-"`
 	Model       string          `json:"model"`
 	Created     json.RawMessage `json:"created,omitempty"`
 	Done        bool            `json:"done"` // for stream
@@ -270,6 +269,20 @@ type ChatResponse struct {
 	Message     Message         `json:"message"`                          // for stream, handlers
 	Stats       `gorm:"embedded"`
 	Choices     []Choice `json:"choices,omitempty"` // INTERNAL do not use
+	Object      string   `json:"object,omitempty"`
+	Usage       *Usage   `json:"usage,omitempty"`
+}
+
+type Usage struct {
+	PromptTokens        *int `json:"prompt_tokens,omitempty"`
+	CompletionTokens    *int `json:"completion_tokens,omitempty"`
+	TotalTokens         *int `json:"total_tokens,omitempty"`
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens,omitempty"`
+	} `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	} `json:"completion_tokens_details,omitempty"`
 }
 
 type Choice struct {
@@ -287,10 +300,6 @@ type Stats struct {
 	PromptEvalCount    int           `json:"prompt_eval_count,omitempty"`
 	EvalCount          int           `json:"eval_count,omitempty"`
 	Usage
-}
-type Usage struct {
-	TotalTokens  int `json:"total_tokens,omitempty"`
-	PromptTokens int `json:"prompt_tokens,omitempty"`
 }
 
 // Message from [LMessage]
@@ -797,7 +806,11 @@ func (m *minireader) ReadStreamFrame(line []byte, handlers []StreamHandler) erro
 	chunk.Choices = nil
 	// keep emptiness if empty
 	if !chunk.Done && len(m.callsparsed) == 0 && chunk.Message.IsEmpty() {
-		Slog().Warn("empty message streamed, possible decode issue", "raw", string(trimmedLine))
+		if chunk.Usage == nil || chunk.Usage.CompletionTokensDetails == nil {
+			Slog().Warn("empty message streamed, possible decode issue", "raw", string(trimmedLine))
+		} else {
+			return nil // TODO: not skip handlers for the final usage fragment?
+		}
 	} else if chunk.Message.Role == "" {
 		chunk.Message.Role = "assistant"
 	}
