@@ -31,6 +31,9 @@ var ThreadHasher = func(v string) uuid.UUID {
 	return id
 }
 
+// DefaultKeepAlive used in [E.NewRequest]
+var DefaultKeepAlive = -1
+
 var NoLogFlags bool
 
 // DefaultThread for all [Message.ToChatMessage] calls.

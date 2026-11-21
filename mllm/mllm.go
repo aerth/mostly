@@ -603,7 +603,7 @@ func (e E) NewRequest(messages []Message, think any) *ChatRequest {
 		Messages:  messages,
 		Stream:    true,
 		Think:     &Think{Value: think},
-		KeepAlive: -1,
+		KeepAlive: DefaultKeepAlive,
 		Options:   e.Options,
 		Tools: slices.DeleteFunc(slices.Clone(e.Tools), func(v json.Marshaler) bool {
 			return v == nil
