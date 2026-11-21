@@ -94,54 +94,67 @@ var EmbedOptions = struct {
 // Untested
 var DefaultEmbedOptions map[string]any // nil
 
+// ThreadFlag name can be renamed if collision with other flag name. If empty, it will not be used at all.
+var ThreadFlag = "thread"
+
+var threadFlagFn = func(s string) error {
+	var id uuid.UUID
+	if err := id.UnmarshalText([]byte(s)); err != nil {
+		if ThreadHasher == nil {
+			return err
+		}
+		id = ThreadHasher(s)
+	}
+	DefaultThread = id
+	return nil
+}
+
 // Flags useful for programs to use, but not necessary. If -v or -q are already flags, set [NoLogFlags] to true.
 func Flags() {
+	flag.IntVar(&DefaultOptions.NumCtx, "llm-ctx", DefaultOptions.NumCtx, "llm num_ctx (0 does not send to api)")
+	flag.Int64Var(&DefaultOptions.Seed, "llm-seed", DefaultOptions.Seed, "llm seed if necessary (0 does not send to api)")
 	flag.Float64Var(DefaultOptions.Temperature, "temperature", *DefaultOptions.Temperature, "temperature")
-	flag.StringVar(&DefaultModel, "model", DefaultModel, "model ONLY if no env var")
-	flag.StringVar(&DefaultHost, "host", DefaultHost, "host URL ONLY if no env var")
-	flag.Func("thread", "thread ID (if applicable)", func(s string) error {
-		var id uuid.UUID
-		if err := id.UnmarshalText([]byte(s)); err != nil {
-			if ThreadHasher == nil {
-				return err
+	flag.StringVar(&DefaultModel, "model", DefaultModel, "model (ONLY if no env var)")
+	flag.StringVar(&DefaultHost, "host", DefaultHost, "host URL (ONLY if no env var)")
+	if ThreadFlag != "" {
+		flag.Func(ThreadFlag, "conversation thread ID (if applicable)", threadFlagFn)
+	}
+	if !NoLogFlags {
+		logFlags()
+	}
+}
+
+func logFlags() {
+	flag.BoolFunc("v", "enable log", func(s string) error {
+		if s != "" {
+			x, _ := strconv.ParseBool(s)
+			if !x {
+				return nil
 			}
-			id = ThreadHasher(s)
 		}
-		DefaultThread = id
+		sl := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		}))
+		DefaultWriter = os.Stderr
+		Slog = func() *slog.Logger {
+			return sl
+		}
 		return nil
 	})
-	if !NoLogFlags {
-		flag.BoolFunc("v", "enable log", func(s string) error {
-			if s != "" {
-				x, _ := strconv.ParseBool(s)
-				if !x {
-					return nil
-				}
+	flag.BoolFunc("q", "disable log", func(s string) error {
+		if s != "" {
+			x, _ := strconv.ParseBool(s)
+			if !x {
+				return nil
 			}
-			sl := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-				Level: slog.LevelDebug,
-			}))
-			DefaultWriter = os.Stderr
-			Slog = func() *slog.Logger {
-				return sl
-			}
-			return nil
-		})
-		flag.BoolFunc("q", "disable log", func(s string) error {
-			if s != "" {
-				x, _ := strconv.ParseBool(s)
-				if !x {
-					return nil
-				}
-			}
-			sl := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-				Level: slog.LevelError,
-			}))
-			DefaultWriter = io.Discard
-			Slog = func() *slog.Logger {
-				return sl
-			}
-			return nil
-		})
-	}
+		}
+		sl := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelError,
+		}))
+		DefaultWriter = io.Discard
+		Slog = func() *slog.Logger {
+			return sl
+		}
+		return nil
+	})
 }
