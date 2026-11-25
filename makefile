@@ -5,3 +5,5 @@ cmds: *.go */*.go */*/*.go
 	go build -o ./bin/ -trimpath -ldflags '-w -s' ./...
 clean:
 	rm -rf bin
+lint:
+	golangci-lint run
