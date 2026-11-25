@@ -4,14 +4,16 @@ tiny ai client package
 
 ## About
 
-The `mllm` package is a lightweight, extensible LLM client library designed to simplify interactions with Large Language Models (LLMs) via providers such as llama.cpp or Ollama. It provides high-level abstractions for handling conversation messages, streaming responses (via a `StreamBG` method and configurable `StreamHandler` callbacks), and tool calling. The package simplifies environment-based configuration (Model, Host, API Key) and requires users to implement their own "tool runners" to execute logic based on the `Tool` specifications and `Call` arguments provided by the LLM.
+*The `mllm` package is a lightweight, extensible LLM client library designed to simplify interactions with Large Language Models (LLMs) via providers such as llama.cpp or Ollama. It provides high-level abstractions for handling conversation messages, streaming responses (via a `StreamBG` method and configurable `StreamHandler` callbacks), and tool calling. The package simplifies environment-based configuration (Model, Host, API Key) and requires users to implement their own "tool runners" to execute logic based on the `Tool` specifications and `Call` arguments provided by the LLM.*
 
 ## Environment Runtime Config
 
 Reads these env vars (in order):
 
 Model: "MLLM_MODEL", "OLLAMA_MODEL", "LLM_MODEL"
+
 Host: "MLLM_HOST", "OLLAMA_HOST", "LLM_HOST"
+
 API Key (optional): "MLLM_API_KEY", "OLLAMA_API_KEY", "LLM_API_KEY"
 
 Use `DEBUG_LLM=1` to see JSON requests/responses
