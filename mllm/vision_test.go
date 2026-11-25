@@ -42,7 +42,7 @@ func getTestImage(t *testing.T) (imageb []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	b, err := io.ReadAll(r.Body)
 	if err != nil {
 		t.Fatal(err)

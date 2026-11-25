@@ -66,7 +66,7 @@ func (c *cancellableChan[T]) CloseChan() {
 
 func (c *cancellableChan[T]) Updates() []T {
 	l := len(c.ch)
-	var updates []T = make([]T, l)
+	updates := make([]T, l)
 	for i := 0; i < l; i++ {
 		u := <-c.ch
 		updates[i] = u

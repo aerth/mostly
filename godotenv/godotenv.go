@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -81,8 +82,6 @@ func Overload(filenames ...string) (err error) {
 	return
 }
 
-// Read all env (with same file loading semantics as Load) but return values as
-// a map rather than automatically writing values into env
 func Read(filenames ...string) (envMap map[string]string, err error) {
 	filenames = filenamesOrDefault(filenames)
 	envMap = make(map[string]string)
@@ -95,9 +94,7 @@ func Read(filenames ...string) (envMap map[string]string, err error) {
 			return // return early on a spazout
 		}
 
-		for key, value := range individualEnvMap {
-			envMap[key] = value
-		}
+		maps.Copy(envMap, individualEnvMap)
 	}
 
 	return
@@ -167,7 +164,7 @@ func loadFile(filename string, overload bool) error {
 	currentEnv := map[string]bool{}
 	rawEnv := os.Environ()
 	for _, rawEnvLine := range rawEnv {
-		key := strings.Split(rawEnvLine, "=")[0]
+		key, _, _ := strings.Cut(rawEnvLine, "=")
 		currentEnv[key] = true
 	}
 
@@ -185,7 +182,7 @@ func readFile(filename string) (envMap map[string]string, err error) {
 	if err != nil {
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	return Parse(file)
 }

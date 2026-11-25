@@ -63,8 +63,6 @@ func _() {
 	ToMarshalers(json.RawMessage(""))
 }
 
-var nolamma = true
-
 type (
 	W  interface{ New() StreamHandler }
 	W1 struct {

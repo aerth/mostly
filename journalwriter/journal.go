@@ -128,7 +128,7 @@ func Send(message string, priority Priority, vars map[string]string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	_, err = io.Copy(file, data)
 	if err != nil {
 		return err
@@ -157,12 +157,12 @@ func appendVariable(w io.Writer, name, value string) {
 		 * - the size (in 64bit little endian format)
 		 * - the data, followed by a newline
 		 */
-		fmt.Fprintln(w, name)
-		binary.Write(w, binary.LittleEndian, uint64(len(value)))
-		fmt.Fprintln(w, value)
+		_, _ = fmt.Fprintln(w, name)
+		_ = binary.Write(w, binary.LittleEndian, uint64(len(value)))
+		_, _ = fmt.Fprintln(w, value)
 	} else {
 		/* just write the variable and value all on one line */
-		fmt.Fprintf(w, "%s=%s\n", name, value)
+		_, _ = fmt.Fprintf(w, "%s=%s\n", name, value)
 	}
 }
 
@@ -179,7 +179,7 @@ func validVarName(name string) error {
 	}
 
 	for _, c := range name {
-		if !(('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') || c == '_') {
+		if ('A' > c || c > 'Z') && ('0' > c || c > '9') && c != '_' {
 			return ErrVarNameInvalid
 		}
 	}
