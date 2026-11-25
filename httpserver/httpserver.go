@@ -143,6 +143,7 @@ func connctxfun(ctx context.Context, c net.Conn) context.Context { // get conn
 	ctx = context.WithValue(ctx, httpctx.KUUID, UUIDFunc(c))
 	return context.WithValue(ctx, httpctx.KConn, c)
 }
+
 func buildserver(basectx context.Context, routes http.Handler) *http.Server {
 	return &http.Server{
 		Addr:                         "", // set by ListenAndServeAll
@@ -187,7 +188,7 @@ var Status404 = http.StatusOK // 200 default
 var DefaultNotFoundHandler = func(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(Status404) // 200 OK
-	w.Write([]byte("{\"code\":404,\"error\":\"not found\"}\n"))
+	_, _ = w.Write([]byte("{\"code\":404,\"error\":\"not found\"}\n"))
 }
 
 // SetEntryMiddleware sets/replaces the (optional) top level middleware
@@ -260,9 +261,11 @@ func (s *HttpServer) RegisterOnShutdown(f func()) {
 func (s *HttpServer) shutdown() {
 	ShutdownServer(s.Server, 5*time.Second)
 }
+
 func (s *HttpServer) ListenAndServe() error {
 	return fmt.Errorf("wrong function: use ListenAndServeAll")
 }
+
 func (s *HttpServer) ListenAndServeTLS(string, string) error {
 	return fmt.Errorf("wrong function: use ListenAndServeAll")
 }
@@ -318,21 +321,24 @@ var OneClosesBoth = true
 // To set true, use: `*http.EscapeHTML = true`
 var EscapeHTML = new(bool)
 
-func (s *HttpServer) ServeJson(w http.ResponseWriter, code int, v any) {
-	ServeJson(w, code, v)
+func (s *HttpServer) ServeJSON(w http.ResponseWriter, code int, v any) {
+	ServeJSON(w, code, v)
 }
-func ServeJson(w http.ResponseWriter, code int, v any) {
+
+func ServeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	enc := json.NewEncoder(w)
 	if EscapeHTML != nil {
 		enc.SetEscapeHTML(*EscapeHTML)
 	}
-	enc.Encode(v)
+	_ = enc.Encode(v)
 }
-func (s *HttpServer) ServeJsonIndent(w http.ResponseWriter, code int, v any) {
+
+func (s *HttpServer) ServeJSONIndent(w http.ResponseWriter, code int, v any) {
 	ServeJsonIndent(w, code, v)
 }
+
 func ServeJsonIndent(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -341,7 +347,7 @@ func ServeJsonIndent(w http.ResponseWriter, code int, v any) {
 	if EscapeHTML != nil {
 		enc.SetEscapeHTML(*EscapeHTML)
 	}
-	enc.Encode(v)
+	_ = enc.Encode(v)
 }
 
 func (s *HttpServer) serveHttps(httpsAddr string, cert, key string, deferfunc func()) {
@@ -384,6 +390,7 @@ func (s *HttpServer) serveHttp(httpAddr string, deferfunc func()) {
 		s.ErrorLog.Printf("https server: no longer listening: %v", context.Cause(s))
 	}
 }
+
 func (s *HttpServer) listenAndServe(httpAddr string, httpsAddr string, cert, key string) {
 	if httpAddr == "" && httpsAddr == "" {
 		panic("listenAndServe: no listen addresses provided")
