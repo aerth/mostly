@@ -27,24 +27,30 @@ func (e E) Stream(ctx context.Context, messages []Message, think any, handlers .
 	return nil
 }
 
-// MultiChat returns a threaded ChatMessage (from [E.From] in thread [E.ThreadID])
+// MultiChat returns a threaded ChatMessage from given ChatMessages (not Messages like [E.MultiChat2])
+// (with 'from' as [E.From] in 'thread' [E.ThreadID])
 //
 // For Messages input see [E.MultiChat2]
 //
 // Like all [E] methods, uses stream mode with /v1/chat/completions endpoint.
 func (e E) MultiChat(ctx context.Context, messages ChatMessages, think any) (ChatMessage, error) {
 	x, err := e.Get(ctx, messages.ToMessages(), think)
-	return *x.Message.ToThreadMessage(e.From, e.ThreadID), err
+	cm := *x.Message.ToThreadMessage(e.From, e.ThreadID)
+	cm.Usage = x.Usage
+	return cm, err
 }
 
-// MultiChat2 returns a threaded ChatMessage (from [E.From] in thread [E.ThreadID])
+// MultiChat2 returns a threaded ChatMessage from given Messages (not ChatMessages like [E.MultiChat])
+// (with 'from' as [E.From] in 'thread' [E.ThreadID])
 //
 // For ChatMessages input see [E.MultiChat]
 //
 // Like all [E] methods, uses stream mode with /v1/chat/completions endpoint.
 func (e E) MultiChat2(ctx context.Context, messages Messages, think any) (ChatMessage, error) {
 	x, err := e.Get(ctx, messages, think)
-	return *x.Message.ToThreadMessage(e.From, e.ThreadID), err
+	cm := *x.Message.ToThreadMessage(e.From, e.ThreadID)
+	cm.Usage = x.Usage
+	return cm, err
 }
 
 // GetMessage is [E.Get] but only message.
