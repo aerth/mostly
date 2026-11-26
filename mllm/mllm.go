@@ -244,7 +244,8 @@ type Options struct {
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"` // -2.0 to 2.0
 	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`  // -2.0 to 2.0
 	//
-	Debug int `json:"-"` // internal, for printing full chatrequest before sending
+	Debug         int `json:"-"` // internal, for printing full chatrequest before sending
+	StreamOptions any `json:"stream_options,omitempty" gorm:"-"`
 }
 
 // ChatResponse streamable has [ChatResponse.Handler]
@@ -853,10 +854,10 @@ func (m *minireader) ReadStreamFrame(line []byte, handlers []StreamHandler) erro
 	chunk.Choices = nil
 	// keep emptiness if empty
 	if !chunk.Done && len(m.callsparsed) == 0 && chunk.Message.IsEmpty() {
-		if chunk.Usage == nil || chunk.Usage.CompletionTokensDetails == nil {
+		if chunk.Usage == nil || chunk.Usage.CompletionTokens == nil || *chunk.Usage.CompletionTokens == 0 {
 			Slog().Warn("empty message streamed, possible decode issue", "raw", json.RawMessage(trimmedLine))
-		} else {
-			Slog().Info("got usage", "usage", json.RawMessage(trimmedLine), "usage", chunk.Usage)
+			//		} else {
+			// Slog().Info("got usage", "usage", json.RawMessage(trimmedLine), "usage", chunk)
 		}
 	} else if chunk.Message.Role == "" {
 		chunk.Message.Role = "assistant"
