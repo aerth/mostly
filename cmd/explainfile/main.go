@@ -43,7 +43,7 @@ var readfile = mllm.Tool{
 }
 
 func main() {
-	flag.BoolVar(&mllm.HideTools, "q", mllm.HideTools, "hide tool calls")
+	flag.BoolVar(&mllm.HideToolCalls, "q", mllm.HideToolCalls, "hide tool calls")
 	flag.Parse()
 
 	filename := flag.Arg(0)
