@@ -1,6 +1,8 @@
 package mllm
 
-import "context"
+import (
+	"context"
+)
 
 // Stream with handlers(only) or to [E.Writer], calls [E.Do]
 //
@@ -73,6 +75,9 @@ func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse
 	//slog := Slog()
 	var chatResp ChatResponse
 	var handlers []StreamHandler
+
+	// add an output for printing the stream to terminal (stderr, stdout, a file, etc...)
+
 	if e.StreamWriter.Writer != nil {
 		handlers = []StreamHandler{e.StreamWriter.New()}
 	} else if e.Writer != nil {
@@ -80,8 +85,10 @@ func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse
 	} else {
 		handlers = []StreamHandler{} // no printing
 	}
+
 	handlers = append(handlers, chatResp.Handler)
 	if len(e.Handlers) != 0 {
+		Slog().Debug("adding handlers", "n", e.Handlers)
 		handlers = append(handlers, e.Handlers...)
 	}
 	err := e.Stream(ctx, messages, think, handlers...)

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"runtime/debug"
 )
 
@@ -158,7 +157,7 @@ func (t Tool) Run(ctx context.Context, args any) (output any, err error) {
 func (t Tool) GetName() string {
 	var x Name
 	if err := json.Unmarshal(t.Spec, &x); err != nil {
-		slog.Error("GetName: json decode tool spec failed", "err", err)
+		Slog().Error("GetName: json decode tool spec failed", "err", err)
 		return ""
 	}
 	name := x.GetName()

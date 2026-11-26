@@ -52,11 +52,13 @@ var (
 	ForcePath         = false
 )
 
+// ToolWriter for call log
 var ToolWriter = toolWriter
 
 // DefaultWriter added to all new endpoints
 var DefaultWriter io.Writer = os.Stderr
 
+// DefaultFrom name (bot name used in ToChatMessage, ToThreadMessage, MultiChat, MultiChat2)
 var DefaultFrom string
 
 // Default creates a new reusable LLM endpoint from env using [NewEndpoint] with no tools no options.

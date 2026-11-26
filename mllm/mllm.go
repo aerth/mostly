@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +18,8 @@ import (
 	"strings"
 	"time"
 	"uuid"
+
+	"github.com/aerth/mostly/ncode"
 )
 
 type Client = E
@@ -40,7 +41,7 @@ type E struct {
 	Options *Options          // Options (optional) added to each NewRequest
 
 	Writer       io.Writer // deprecated: use a StreamHandler. used in [E.Get] as StreamWriter if no StreamWriter
-	StreamWriter W1        `json:"-" gorm:"-"` // deprecated, use a StreamHandler. used as only handler **IF no handlers given**
+	StreamWriter W1        `json:"-" gorm:"-"` // deprecated: use a StreamHandler. used as only handler **IF no handlers given**
 
 	PreRequest func(request *ChatRequest) error `json:"-"` // PreRequest modifier hook
 
@@ -95,21 +96,31 @@ func (c StreamHandler) HandleChat(cr ChatResponse) error {
 }
 
 var (
-	DefaultThinkPre         = "\nThinking:\n"
-	DefaultThinkPost        = "\n... done thinking.\n"
-	ThinkRequestType        = false
-	StopAtFirstHandlerError = true
-	ErrNoLines              = errors.New("no lines read")
-	HideThink               = false
-	HideTools               = false
-	EnvModel                = []string{"MLLM_MODEL", "OLLAMA_MODEL", "LLM_MODEL"}
-	EnvHost                 = []string{"MLLM_HOST", "OLLAMA_HOST", "LLM_HOST"}
-	EnvKey                  = []string{"MLLM_API_KEY", "OLLAMA_API_KEY", "LLM_API_KEY"}
+	ErrNoLines = errors.New("no lines read")
+	ErrNoConvo = errors.New("no messages in conversation")
+)
+
+var (
+	DefaultThinkPre  = "\nThinking:\n"          // for default printer
+	DefaultThinkPost = "\n... done thinking.\n" // for default printer
+
+	ThinkRequestType        = false // if think should be wrapped in `{"effort": v}`
+	StopAtFirstHandlerError = true  // if frame should stop processing at first error, or send the frame to all handlers
+	HideThink               = false // for default printer
+	HideToolCalls           = false // for default printer
+	HideUsageStats          = false // for default printer
+	TruncateLogToolOutChars = -1
 	DebugLLMRead            = os.Getenv("MLLM_DEBUG_READ") == "1"
 	DebugLLM2               = os.Getenv("DEBUG_LLM") == "2"
 	DebugLLM                = os.Getenv("DEBUG_LLM") == "1" || DebugLLM2
-	ErrNoConvo              = errors.New("no messages in conversation")
 	Quiet                   = false // quiet the debug
+)
+
+// envs for mllm defaults, order subject to change
+var (
+	EnvModel = []string{"MLLM_MODEL", "OLLAMA_MODEL", "LLM_MODEL"}
+	EnvHost  = []string{"MLLM_HOST", "OLLAMA_HOST", "LLM_HOST"}
+	EnvKey   = []string{"MLLM_API_KEY", "OLLAMA_API_KEY", "LLM_API_KEY"}
 )
 
 func firstEnv(k []string) string {
@@ -158,12 +169,16 @@ func NewEndpoint(options *Options, tools []json.Marshaler) E {
 		w1 = W1{Writer: DefaultWriter, ThinkPre: DefaultThinkPre, ThinkPost: DefaultThinkPost}
 	}
 	return E{
-		Host: hostURL, Model: model, Client: DefaultHTTPClient, Options: options, Tools: tools,
+		Host: hostURL, Model: model,
+		Client:       DefaultHTTPClient,
+		Options:      options,
+		Tools:        tools,
 		StreamWriter: w1,
-		Headers:      hdr, Handlers: nil,
-		ThreadID: DefaultThread,
-		Writer:   DefaultWriter,
-		From:     DefaultFrom,
+		Headers:      hdr,
+		Handlers:     nil,
+		ThreadID:     DefaultThread,
+		Writer:       DefaultWriter,
+		From:         DefaultFrom,
 	}
 }
 
@@ -350,7 +365,7 @@ func (m *Message) UnmarshalJSON(b []byte) error {
 	}
 	content := ""
 	for _, v := range al.Content {
-		slog.Info("got keys", "keys", slices.Collect(maps.Keys(v)))
+		//slog.Info("got keys", "keys", slices.Collect(maps.Keys(v)))
 		if v["type"] == "text" {
 			content, _ = v["text"].(string)
 		}
@@ -534,12 +549,13 @@ func StdoutHandler(cr ChatResponse) error {
 
 // NewHandlerOut plain 🍔
 func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler {
-	if w == nil {
+	if w == nil || w == io.Discard {
 		return func(cr ChatResponse) error { return nil }
 	}
 	reasoning := false
 	hidethink := HideThink
-	hidetools := HideTools
+	hidetools := HideToolCalls
+	hidestats := false
 	wrote := false
 	var calls []json.RawMessage
 	return func(cr ChatResponse) error {
@@ -583,19 +599,24 @@ func NewHandlerOut(w io.Writer, thinkpre string, thinkpost string) StreamHandler
 				_, _ = fmt.Fprint(w, "\n")
 			}
 			fflush(w)
+			if !hidestats && (cr.Usage != nil) {
+				_ = ToolWriter(ToolWriterOut, ncode.JSON(cr.Usage))
+			}
+			fflush(w)
 
 			// be kind rewind
 			calls = nil
 			wrote = false
 			reasoning = false
 			hidethink = HideThink
-			hidetools = HideTools
+			hidetools = HideToolCalls
 		}
 
 		return nil
 	}
 }
 
+// ToolWriterOut for call log
 var ToolWriterOut io.Writer = os.Stderr
 
 func toolWriter(w io.Writer, rawMessage json.RawMessage) (err error) {
@@ -623,17 +644,19 @@ func (c *ChatResponse) Handler(in ChatResponse) error {
 	if in.Stats != (Stats{}) {
 		c.Stats = in.Stats // TODO: stats update
 	}
-	if in.Usage != nil && in.Usage.CompletionTokens != nil {
-		c.Usage = in.Usage // TODO: server adds them but, maybe be more precise dont overwrite?
+	if DebugLLM && in.Usage != nil {
+		slog.Info("found usage", "u", in.Usage, "was", c.Usage)
 	}
 	if c.Usage == nil {
 		c.Usage = in.Usage
+	} else if in.Usage != nil && in.Usage.CompletionTokens != nil {
+		c.Usage = in.Usage // TODO: server adds them but, maybe be more precise dont overwrite?
 	}
 	if in.Model != "" {
 		c.Model = in.Model
 	}
 	if in.Timings != nil {
-		c.Timings = in.Timings // llama adds them
+		c.Timings = in.Timings // llama adds them TODO: sometimes?
 	}
 	msg := &c.Message
 	*msg = msg.Add(in.Message)
@@ -711,12 +734,11 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 	err = e.Read(ctx, reader, handlers...)
 	if err != nil {
 		if !Quiet {
-			if e.Options == nil || e.Options.Debug < 2 {
-				Slog().Info("sent request body", "js", json.RawMessage(bodyBytes))
+			if e.Options == nil || e.Options.Debug < 2 { // request body was already printed
+				Slog().Warn("sent request body", "js", json.RawMessage(bodyBytes))
 			}
-			Slog().Info("full response body", "js", copybuf.String())
+			Slog().Warn("full response body", "js", copybuf.String())
 		}
-		slog.Error("errorreading", "err", err)
 		return Errorf("%w", err)
 	}
 	return nil
@@ -790,7 +812,7 @@ func (m *minireader) ReadStreamFrame(line []byte, handlers []StreamHandler) erro
 		return nil
 	}
 	if DebugLLMRead {
-		slog.Debug("mllm.ReadStreamFrame", "trimmed", string(trimmedLine))
+		Slog().Debug("mllm.ReadStreamFrame", "trimmed", string(trimmedLine))
 	}
 	var chunk ChatResponse
 	if post, ok := bytes.CutPrefix(trimmedLine, []byte("[DONE]")); ok {
