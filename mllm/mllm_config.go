@@ -70,9 +70,6 @@ var (
 	Slog   = slog.Default
 )
 
-// NewE custom NewEndpoint
-var NewE = NewEndpoint
-
 // EmbedOptions application-wide global options
 //
 // Apart from Path, all serve as fallback if not present in request/env.
