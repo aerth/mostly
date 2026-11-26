@@ -621,13 +621,16 @@ func (c *ChatResponse) Handler(in ChatResponse) error {
 		c.DoneReason = in.DoneReason
 	}
 	if in.Stats != (Stats{}) {
-		c.Stats = in.Stats
+		c.Stats = in.Stats // TODO: stats update
 	}
 	if in.Usage != nil && in.Usage.CompletionTokens != nil {
-		c.Usage = in.Usage // TODO: more precise dont overwrite
+		c.Usage = in.Usage // TODO: server adds them but, maybe be more precise dont overwrite?
 	}
 	if c.Usage == nil {
 		c.Usage = in.Usage
+	}
+	if in.Model != "" {
+		c.Model = in.Model
 	}
 	if in.Timings != nil {
 		c.Timings = in.Timings // llama adds them
