@@ -78,8 +78,11 @@ func TestJson(t *testing.T) {
 	}
 	js = jsonMarshal(err.(*stackerr.StackError).St)
 	logg.Printf("stack json: %s", string(js))
-	if !strings.HasPrefix(string(js), `{"name":"stackerr_test.TestJson","file":"/home/username/src/mostly/stackerr/err_test.go","line":`+fmt.Sprint(prevline)+`,"time":`) {
-		t.Fatalf("json did not")
+	if !strings.HasPrefix(string(js), `{"name":"stackerr_test.TestJson","file":"/`) {
+		t.Fatalf("json did not have func name")
+	}
+	if !strings.Contains(string(js), `mostly/stackerr/err_test.go","line":`+fmt.Sprint(prevline)+`,"time":`) {
+		t.Fatalf("json did not have file/line")
 	}
 }
 
