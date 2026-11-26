@@ -20,8 +20,8 @@ type ChatMessage struct {
 	CreatedAt time.Time `json:"created_at"`                                     // Created or received at
 	Thread    uuid.UUID `json:"thread,omitempty" gorm:"type:uuid;default:null"` // Conversation thread this message belongs to
 
-	Aux   any    `json:"-" gorm:"-"` // for non-messages, unused by mllm package
-	Usage *Usage `json:"-" gorm:"-"` // for completed assistant messages, unused by mllm package
+	Aux   any    `json:"-" gorm:"-"`                                                     // for non-messages, unused by mllm package
+	Usage *Usage `json:"usage,omitempty" gorm:"type:jsonb;serializer:json;default:null"` // for completed assistant messages, unused by mllm package
 }
 
 func (m *ChatMessage) HandleChat(cr ChatResponse) error {
