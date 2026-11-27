@@ -88,7 +88,7 @@ func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse
 
 	handlers = append(handlers, chatResp.Handler)
 	if len(e.Handlers) != 0 {
-		Slog().Debug("adding handlers", "n", e.Handlers)
+		Slog().Debug("adding handlers", "n", len(e.Handlers))
 		handlers = append(handlers, e.Handlers...)
 	}
 	err := e.Stream(ctx, messages, think, handlers...)
