@@ -43,6 +43,7 @@ func (e E) MultiChat(ctx context.Context, messages ChatMessages, think any) (Cha
 	x, err := e.Get(ctx, messages.ToMessages(), think)
 	cm := *x.Message.ToThreadMessage(e.From, e.ThreadID)
 	cm.Usage = x.Usage
+	cm.Timings = x.Timings
 	return cm, err
 }
 
@@ -56,6 +57,7 @@ func (e E) MultiChat2(ctx context.Context, messages Messages, think any) (ChatMe
 	x, err := e.Get(ctx, messages, think)
 	cm := *x.Message.ToThreadMessage(e.From, e.ThreadID)
 	cm.Usage = x.Usage
+	cm.Timings = x.Timings
 	return cm, err
 }
 

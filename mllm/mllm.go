@@ -301,7 +301,7 @@ type Usage struct {
 	CompletionTokens    *int `json:"completion_tokens,omitempty"`
 	TotalTokens         *int `json:"total_tokens,omitempty"`
 	PromptTokensDetails *struct {
-		CachedTokens int `json:"cached_tokens,omitempty"`
+		CachedTokens int `json:"cached_tokens"` // is zero
 	} `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails *struct {
 		ReasoningTokens int `json:"reasoning_tokens,omitempty"`
@@ -653,9 +653,6 @@ func (c *ChatResponse) Handler(in ChatResponse) error {
 	if in.Stats != (Stats{}) {
 		c.Stats = in.Stats // TODO: stats update
 	}
-	if DebugLLM && in.Usage != nil {
-		slog.Info("found usage", "u", in.Usage, "was", c.Usage)
-	}
 	if c.Usage == nil {
 		c.Usage = in.Usage
 	} else if in.Usage != nil && in.Usage.CompletionTokens != nil {
@@ -710,7 +707,6 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 	if creq.Options != nil && creq.Debug > 1 {
 		Slog().Info("sending body js", "body", json.RawMessage(bodyBytes))
 	}
-
 	req, err := http.NewRequestWithContext(ctx, "POST", e.Host.String(), bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return Errorf("failed to create request: %w", err)
@@ -854,14 +850,12 @@ func (m *minireader) ReadStreamFrame(line []byte, handlers []StreamHandler, chun
 		if chunk.Message.Reasoning2 != "" {
 			chunk.Message.Reasoning = chunk.Message.Reasoning2
 			chunk.Message.Reasoning2 = ""
-		}
-		if chunk.Message.Reasoning3 != "" {
-			chunk.Message.Reasoning = chunk.Message.Reasoning3
-			chunk.Message.Reasoning3 = ""
-		}
-		if x := chunk.Message.ToolCallID2; x != "" {
-			chunk.Message.ToolCallID = x
 			chunk.Message.ToolCallID2 = ""
+		}
+		if l := len(chunk.Choices); l != 1 {
+			if l > 1 || chunk.Usage == nil {
+				slog.Warn("found choices", "n", l, "trimmed", json.RawMessage(trimmedLine))
+			}
 		}
 		for i := range chunk.Choices {
 			choice := &chunk.Choices[i]
@@ -972,10 +966,10 @@ func (e E) Read(ctx context.Context, reader *bufio.Reader, handlers ...StreamHan
 		if err := mini.ReadStreamFrame(line, handlers, latestChunkptr); err != nil {
 			return Errorf("%w", err)
 		}
-		if latestChunk.Done && latestChunk.Usage == nil {
+		if latestChunk.Done && latestChunk.Usage == nil { // this will be last sent
 			latestDoneChunk = latestChunk
 		}
-	} // stream loop
+	} // stream loop done
 
 	// if Done was found and should be handled
 	if latestDoneChunk.Done {
@@ -1052,6 +1046,15 @@ func (st Stats) SummaryString() string {
 	return buf.String()
 }
 
+func NewStats(u Usage, ti LTimings) Stats {
+	return Stats{
+		Usage:              u,
+		PromptEvalDuration: time.Duration(ti.PromptMs * float64(time.Millisecond)),
+		LoadDuration:       0,
+		EvalDuration:       time.Duration(ti.PredictedMs * float64(time.Millisecond)),
+	}
+}
+
 // Summary in well-known format
 func Summary(w io.Writer, st Stats) (err error) {
 	if st.TotalDuration != 0 {
@@ -1066,6 +1069,10 @@ func Summary(w io.Writer, st Stats) (err error) {
 			return Errorf("%w", err)
 		}
 	}
+	usage := st.Usage
+	if usage.PromptTokens != nil {
+		st.PromptEvalCount = *usage.PromptTokens
+	}
 	if st.PromptEvalCount != 0 {
 		_, err = fmt.Fprintf(w, "prompt eval count:    %d token(s)\n", st.PromptEvalCount)
 		if err != nil {
@@ -1077,10 +1084,15 @@ func Summary(w io.Writer, st Stats) (err error) {
 		if err != nil {
 			return Errorf("%w", err)
 		}
+	}
+	if st.PromptEvalCount != 0 && st.PromptEvalDuration != 0 {
 		_, err = fmt.Fprintf(w, "prompt eval rate:     %.2f tokens/s\n", float64(st.PromptEvalCount)/st.PromptEvalDuration.Seconds())
 		if err != nil {
 			return Errorf("%w", err)
 		}
+	}
+	if usage.CompletionTokens != nil {
+		st.EvalCount = *usage.CompletionTokens
 	}
 	if st.EvalCount != 0 {
 		_, err = fmt.Fprintf(w, "eval count:           %d token(s)\n", st.EvalCount)

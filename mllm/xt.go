@@ -20,8 +20,9 @@ type ChatMessage struct {
 	CreatedAt time.Time `json:"created_at"`                                     // Created or received at
 	Thread    uuid.UUID `json:"thread,omitempty" gorm:"type:uuid;default:null"` // Conversation thread this message belongs to
 
-	Aux   any    `json:"-" gorm:"-"`                                                     // for non-messages, unused by mllm package
-	Usage *Usage `json:"usage,omitempty" gorm:"type:jsonb;serializer:json;default:null"` // for completed assistant messages, unused by mllm package
+	Aux     any       `json:"-" gorm:"-"`                                                       // for non-messages, unused by mllm package
+	Usage   *Usage    `json:"usage,omitempty" gorm:"type:jsonb;serializer:json;default:null"`   // for completed assistant messages, unused by mllm package
+	Timings *LTimings `json:"timings,omitempty" gorm:"type:jsonb;serializer:json;default:null"` // for completed assistant messages, unused by mllm package
 }
 
 func (m *ChatMessage) HandleChat(cr ChatResponse) error {
@@ -87,6 +88,12 @@ func (m ChatMessage) Add(m2 ChatMessage) ChatMessage {
 	}
 	if m2.Aux != nil {
 		m.Aux = m2.Aux
+	}
+	if m2.Usage != nil {
+		m.Usage = m2.Usage
+	}
+	if m2.Timings != nil {
+		m.Timings = m2.Timings
 	}
 	return m
 }
