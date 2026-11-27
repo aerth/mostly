@@ -112,7 +112,7 @@ var threadFlagFn = func(s string) error {
 func Flags() {
 	flag.IntVar(&DefaultOptions.NumCtx, "llm-ctx", DefaultOptions.NumCtx, "llm num_ctx (0 does not send to api)")
 	flag.Int64Var(&DefaultOptions.Seed, "llm-seed", DefaultOptions.Seed, "llm seed if necessary (0 does not send to api)")
-	flag.Float64Var(DefaultOptions.Temperature, "temperature", *DefaultOptions.Temperature, "temperature")
+	flag.Float64Var(DefaultOptions.Temperature, "temperature", *DefaultOptions.Temperature, "temperature, negative will use model default")
 	flag.StringVar(&DefaultModel, "model", DefaultModel, "model (ONLY if no env var)")
 	flag.StringVar(&DefaultHost, "host", DefaultHost, "host URL (ONLY if no env var)")
 	if ThreadFlag != "" {
@@ -140,7 +140,7 @@ func logFlags() {
 		}
 		return nil
 	})
-	flag.BoolFunc("q", "disable log", func(s string) error {
+	flag.BoolFunc("q", "less logging", func(s string) error {
 		if s != "" {
 			x, _ := strconv.ParseBool(s)
 			if !x {
@@ -148,7 +148,7 @@ func logFlags() {
 			}
 		}
 		sl := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelError,
+			Level: slog.LevelWarn,
 		}))
 		DefaultWriter = io.Discard
 		Slog = func() *slog.Logger {

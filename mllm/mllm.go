@@ -139,6 +139,11 @@ func firstEnv(k []string) string {
 func NewEndpoint(options *Options, tools []json.Marshaler) E {
 	if options == nil {
 		options = new(DefaultOptions)
+
+		// negative temperature to use model default
+		if options.Temperature != nil && *options.Temperature < 0 {
+			options.Temperature = nil
+		}
 		if DebugLLM2 { // dont override param
 			options.Debug = 2
 		}
