@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -89,7 +88,7 @@ func (e E) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) 
 			Code    *int
 			Message *string
 		}{Code: &code, Message: &msg}); err != nil {
-			slog.Error(fmt.Sprintf("could not decode response error: %s", string(resp.Error)))
+			Slog().Error(fmt.Sprintf("could not decode response error: %s", string(resp.Error)))
 		}
 		return resp, ErrorWithResponse{error: fmt.Errorf("%d: %s", code, msg), body: buf}
 	}
@@ -98,7 +97,7 @@ func (e E) Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error) 
 		resp.Data = nil
 	}
 	if len(resp.Embeddings) == 0 {
-		slog.Error("no embeddings in response", "x", resp)
+		Slog().Error("no embeddings in response", "x", resp)
 		return resp, ErrorWithResponse{error: fmt.Errorf("none"), body: buf}
 	}
 	em := resp.Embeddings[0]
