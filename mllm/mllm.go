@@ -737,6 +737,9 @@ func (e E) Do(ctx context.Context, creq ChatRequest, handlers []StreamHandler) e
 	reader := bufio.NewReader(io.TeeReader(resp.Body, &copybuf))
 
 	err = e.Read(ctx, reader, handlers...)
+	if errors.Is(err, context.Canceled) {
+		return Errorf("%w", err)
+	}
 	if err != nil {
 		if !Quiet {
 			if e.Options == nil || e.Options.Debug < 2 { // request body was already printed
