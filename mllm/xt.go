@@ -121,6 +121,29 @@ func (cm ChatMessages) Top() ChatMessage {
 	return cm[l-1]
 }
 
+func (cm ChatMessages) TopRoleIndex(role string) int {
+	l := len(cm)
+	if l == 0 {
+		return -1
+	}
+	l -= 1
+	for i := range cm {
+		if cm[l-i].Role == role {
+			return l - i
+			//		return cm[i]
+		}
+	}
+	return -1
+}
+
+func (cm ChatMessages) TopRole(role string) ChatMessage {
+	i := cm.TopRoleIndex(role)
+	if i < 0 {
+		return ChatMessage{}
+	}
+	return cm[i]
+}
+
 func (cm ChatMessages) TopN(n int) ChatMessages {
 	l := len(cm)
 	if l == 0 {
@@ -130,20 +153,6 @@ func (cm ChatMessages) TopN(n int) ChatMessages {
 		return cm
 	}
 	return cm[l-n:]
-}
-
-func (cm ChatMessages) TopRole(role string) ChatMessage {
-	l := len(cm)
-	if l == 0 {
-		return ChatMessage{}
-	}
-	l -= 1
-	for i := range cm {
-		if cm[l-i].Role == role {
-			return cm[i]
-		}
-	}
-	return ChatMessage{}
 }
 
 func (cm ChatMessages) ToMessages() Messages {
