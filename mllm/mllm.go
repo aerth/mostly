@@ -20,6 +20,7 @@ import (
 	"uuid"
 
 	"github.com/aerth/mostly/ncode"
+	"github.com/aerth/mostly/stackerr"
 )
 
 type Client = E
@@ -216,7 +217,8 @@ func (e E) WithOptions(options *Options) E {
 	return e
 }
 
-// Think Value should be one of: nil,"low","medium","high",true,false
+// Think Value should be one of: nil, or:
+// "minimal", "low", "medium", "high", "xhigh", "ultra", "max", or "none"
 type Think struct {
 	Value `json:"-"`
 }
@@ -232,6 +234,8 @@ func (t Think) MarshalJSON() ([]byte, error) {
 	} else if v, ok := tv.(bool); ok {
 		if !v {
 			tv = "none"
+		} else {
+			tv = nil // TODO: usually nil is on.
 		}
 	} else {
 		return nil, fmt.Errorf("unknown think type %T", t.Value)
@@ -425,7 +429,7 @@ func (m Message) MarshalJSON() ([]byte, error) {
 		if typ == "application/octet-stream" {
 			return nil, fmt.Errorf("could not detect image type")
 		}
-		slog.Info("image type", "k", typ)
+		//slog.Info("image type", "k", typ)
 		jb64, err := json.Marshal(m.Images[i])
 		if err != nil {
 			return nil, err
@@ -799,7 +803,7 @@ func (m minireader) Err() error {
 	return errors.Join(m.errors...)
 }
 
-func (m *minireader) ReadStreamFrame(line []byte, handlers []StreamHandler) error {
+func (m *minireader) ReadStreamFrame(line []byte, handlers []StreamHandler, chunkPtr *ChatResponse) error {
 	m.nlines++
 	trimmedLine := bytes.TrimSpace(line)
 	if len(trimmedLine) == 0 {
@@ -826,85 +830,106 @@ func (m *minireader) ReadStreamFrame(line []byte, handlers []StreamHandler) erro
 	if len(trimmedLine) == 0 {
 		return nil
 	}
+	if trimmedLine[0] != '{' {
+		return ErrorWithResponse{
+			error: stackerr.Errorf("not a JSON object"),
+			body:  trimmedLine,
+		}
+	}
 	//	println("GOT LINE", len(trimmedLine), string(trimmedLine))
 	if err := json.Unmarshal(trimmedLine, &chunk); err != nil { // chunk
-		Slog().Error("decode cr", "err", err, "chunk", string(trimmedLine))
-		return Errorf("Read: %w", err)
-	}
-	if chunk.DoneReason2 != "" {
-		chunk.Done = true
-		chunk.DoneReason = chunk.DoneReason2
-		chunk.DoneReason2 = ""
-	}
-	if chunk.Message.Reasoning2 != "" {
-		chunk.Message.Reasoning = chunk.Message.Reasoning2
-		chunk.Message.Reasoning2 = ""
-	}
-	if chunk.Message.Reasoning3 != "" {
-		chunk.Message.Reasoning = chunk.Message.Reasoning3
-		chunk.Message.Reasoning3 = ""
-	}
-	if x := chunk.Message.ToolCallID2; x != "" {
-		chunk.Message.ToolCallID = x
-		chunk.Message.ToolCallID2 = ""
-	}
-	for i := range chunk.Choices {
-		choice := &chunk.Choices[i]
-		if l := len(choice.Delta.ToolCalls); l != 0 {
-			if callsfound, err := chunkCollectCall(choice); err != nil {
-				return Errorf("Read.chunkCollectCall: %w", err)
-			} else if len(callsfound) != 0 {
-				m.callsparsed = append(m.callsparsed, callsfound...)
-				chunk.Message.PendingToolCalls = callsfound // for UI
-				chunk.Message.ToolCalls = nil               // yank from chunk/choice so StreamHandlers dont read partial tools
-				choice.Delta.ToolCalls = nil
-			}
+		Slog().Error("could not decode JSON stream chunk", "err", err, "chunk", string(trimmedLine))
+		return ErrorWithResponse{
+			error: stackerr.Errorf("Read: %w", err),
+			body:  trimmedLine,
 		}
+	}
+	// various migrations, TODO: remove some unused after confirming all providers
+	{
 		if chunk.DoneReason2 != "" {
 			chunk.Done = true
 			chunk.DoneReason = chunk.DoneReason2
 			chunk.DoneReason2 = ""
 		}
-		if choice.Delta.Reasoning3 != "" {
-			choice.Delta.Reasoning = choice.Delta.Reasoning3
-		} else if choice.Delta.Reasoning2 != "" {
-			choice.Delta.Reasoning = choice.Delta.Reasoning2
+		if chunk.Message.Reasoning2 != "" {
+			chunk.Message.Reasoning = chunk.Message.Reasoning2
+			chunk.Message.Reasoning2 = ""
 		}
-
-		choice.Delta.Reasoning2 = ""
-		if ptr := choice.FinishReason; ptr != nil {
-			chunk.Done = true
-			chunk.DoneReason = *ptr
+		if chunk.Message.Reasoning3 != "" {
+			chunk.Message.Reasoning = chunk.Message.Reasoning3
+			chunk.Message.Reasoning3 = ""
 		}
 		if x := chunk.Message.ToolCallID2; x != "" {
-			panic("oops")
+			chunk.Message.ToolCallID = x
+			chunk.Message.ToolCallID2 = ""
 		}
-		chunk.Message = chunk.Message.Add(choice.Delta)
+		for i := range chunk.Choices {
+			choice := &chunk.Choices[i]
+			if l := len(choice.Delta.ToolCalls); l != 0 {
+				if callsfound, err := chunkCollectCall(choice); err != nil {
+					return Errorf("Read.chunkCollectCall: %w", err)
+				} else if len(callsfound) != 0 {
+					m.callsparsed = append(m.callsparsed, callsfound...)
+					chunk.Message.PendingToolCalls = callsfound // for UI
+					chunk.Message.ToolCalls = nil               // yank from chunk/choice so StreamHandlers dont read partial tools
+					choice.Delta.ToolCalls = nil
+				}
+			}
+			if chunk.DoneReason2 != "" {
+				chunk.Done = true
+				chunk.DoneReason = chunk.DoneReason2
+				chunk.DoneReason2 = ""
+			}
+			if choice.Delta.Reasoning3 != "" {
+				choice.Delta.Reasoning = choice.Delta.Reasoning3
+			} else if choice.Delta.Reasoning2 != "" {
+				choice.Delta.Reasoning = choice.Delta.Reasoning2
+			}
+
+			choice.Delta.Reasoning2 = ""
+			if ptr := choice.FinishReason; ptr != nil {
+				chunk.Done = true
+				chunk.DoneReason = *ptr
+			}
+			if x := chunk.Message.ToolCallID2; x != "" {
+				panic("oops")
+			}
+			chunk.Message = chunk.Message.Add(choice.Delta) // add Delta to chunk.Message
+		}
+		chunk.Choices = nil
 	}
-	chunk.Choices = nil
 	// keep emptiness if empty
-	if !chunk.Done && len(m.callsparsed) == 0 && chunk.Message.IsEmpty() {
-		if chunk.Usage == nil || chunk.Usage.CompletionTokens == nil || *chunk.Usage.CompletionTokens == 0 {
-			Slog().Warn("empty message streamed, possible decode issue", "raw", json.RawMessage(trimmedLine))
-			//		} else {
-			// Slog().Info("got usage", "usage", json.RawMessage(trimmedLine), "usage", chunk)
-		}
-	} else if chunk.Message.Role == "" {
+	if !chunk.Done && chunk.Usage == nil && len(m.callsparsed) == 0 && chunk.Message.IsEmpty() {
+		Slog().Warn("empty message streamed, possible decode issue", "raw", json.RawMessage(trimmedLine))
+	} else if !chunk.Message.IsEmpty() && chunk.Message.Role == "" {
 		chunk.Message.Role = "assistant"
 	}
 	if chunk.Done && len(m.callsparsed) != 0 {
 		// send tool calls in the last frame
 		chunk.Message.ToolCalls = m.callsparsed.Combined().ToJSON()
 		m.callsparsed = nil
+		chunk.Message.PendingToolCalls = nil
 	}
 
+	// to fix usage-after-done api issue, send to handlers at the end
+	if chunkPtr != nil {
+		*chunkPtr = chunk
+		if chunk.Done && chunk.Usage == nil {
+			return nil // handled by caller
+		}
+	}
 	// each of the StreamHandlers (such as [ChatResponse.Handler] )
+	return runHandlers(chunk, handlers...)
+}
+
+func runHandlers(chunk ChatResponse, handlers ...StreamHandler) error {
+	var errs error
 	for i, handler := range handlers {
 		if err := handler(chunk); err != nil {
 			if StopAtFirstHandlerError {
 				return Errorf("%w", err)
 			}
-			m.errors = append(m.errors, Errorf("handler %d/%d: %w", i+1, len(handlers), err))
+			errs = errors.Join(errs, Errorf("handler %d/%d: %w", i+1, len(handlers), err))
 		}
 	}
 	return nil
@@ -921,12 +946,12 @@ func (e E) Read(ctx context.Context, reader *bufio.Reader, handlers ...StreamHan
 		return Errorf("Read: no handlers")
 	}
 	var mini minireader
+	var latestDoneChunk ChatResponse
 	for {
 		if ctx.Err() != nil {
 			return context.Cause(ctx)
 		}
 		line, err := reader.ReadBytes('\n')
-		//println("LINE:", string(line))
 		isEOF := errors.Is(err, io.EOF)
 		if isEOF && mini.nlines == 0 {
 			err = nil
@@ -937,10 +962,27 @@ func (e E) Read(ctx context.Context, reader *bufio.Reader, handlers ...StreamHan
 		if err != nil {
 			return Errorf("Read: error reading stream: %w", err)
 		}
-		if err := mini.ReadStreamFrame(line, handlers); err != nil {
+
+		// put Done as last
+		var latestChunk ChatResponse
+		latestChunkptr := &latestChunk
+		if latestDoneChunk.Done {
+			latestChunkptr = nil // de-duped
+		}
+		if err := mini.ReadStreamFrame(line, handlers, latestChunkptr); err != nil {
 			return Errorf("%w", err)
 		}
+		if latestChunk.Done && latestChunk.Usage == nil {
+			latestDoneChunk = latestChunk
+		}
 	} // stream loop
+
+	// if Done was found and should be handled
+	if latestDoneChunk.Done {
+		if err := runHandlers(latestDoneChunk, handlers...); err != nil {
+			return Errorf("%w", err)
+		}
+	}
 	errs := mini.Err()
 	lines := mini.NLines()
 	if errs != nil {

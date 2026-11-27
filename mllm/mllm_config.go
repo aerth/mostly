@@ -32,7 +32,9 @@ var ThreadHasher = func(v string) uuid.UUID {
 }
 
 // DefaultKeepAlive used in [E.NewRequest]
-var DefaultKeepAlive = -1
+//
+// Ollama users can set -1
+var DefaultKeepAlive = 0
 
 var NoLogFlags bool
 

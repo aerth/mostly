@@ -2,6 +2,7 @@ package mllm
 
 import (
 	"context"
+	"fmt"
 )
 
 // Stream with handlers(only) or to [E.Writer], calls [E.Do]
@@ -17,6 +18,9 @@ func (e E) Stream(ctx context.Context, messages []Message, think any, handlers .
 	creq := e.NewRequest(messages, think)
 	if creq == nil {
 		return Errorf("could not create request")
+	}
+	if think == nil && creq.Think != nil {
+		return fmt.Errorf("error")
 	}
 	if e.PreRequest != nil {
 		if err := e.PreRequest(creq); err != nil {
@@ -72,12 +76,12 @@ func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse
 	if e := e.ValidateConfig(think); e != nil {
 		return ChatResponse{}, Errorf("validate: %w", e)
 	}
-	//slog := Slog()
+
+	// Get collects it's own ChatResponse
 	var chatResp ChatResponse
-	var handlers []StreamHandler
 
 	// add an output for printing the stream to terminal (stderr, stdout, a file, etc...)
-
+	var handlers []StreamHandler
 	if e.StreamWriter.Writer != nil {
 		handlers = []StreamHandler{e.StreamWriter.New()}
 	} else if e.Writer != nil {
@@ -85,10 +89,8 @@ func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse
 	} else {
 		handlers = []StreamHandler{} // no printing
 	}
-
 	handlers = append(handlers, chatResp.Handler)
 	if len(e.Handlers) != 0 {
-		Slog().Debug("adding handlers", "n", len(e.Handlers))
 		handlers = append(handlers, e.Handlers...)
 	}
 	err := e.Stream(ctx, messages, think, handlers...)
@@ -98,7 +100,7 @@ func (e E) Get(ctx context.Context, messages []Message, think any) (ChatResponse
 	return chatResp, nil
 }
 
-// Generate helper, uses [E.GetMessage] with a new conversation.
+// Generate helper, uses [E.GetMessage] ([E.Get]) with a new conversation.
 //
 // Like all [E] methods, uses stream mode with /v1/chat/completions endpoint.
 func (e E) Generate(ctx context.Context, sys string, usr string, think any) (Message, error) {
