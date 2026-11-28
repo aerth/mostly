@@ -306,6 +306,7 @@ type Usage struct {
 	CompletionTokensDetails *struct {
 		ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 	} `json:"completion_tokens_details,omitempty"`
+	Model string `json:"model,omitempty"` // internal, copied from ChatResponse
 }
 
 type Choice struct {
